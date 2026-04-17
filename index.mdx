@@ -1,97 +1,53 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "MechCommander 2: Open Source Engine"
+description: "Open-source reimplementation of the MechCommander 2 RTS engine with OpenGL rendering, cross-platform Linux and Windows support, and a full asset pipeline."
 ---
 
-## Setting up
+MechCommander 2 Open Source Engine is a community-maintained reimplementation of the original MC2 engine, built from the game's published header files. It runs the full single-player campaign on both Linux and Windows in 64-bit mode, with OpenGL rendering replacing the original DirectX pipeline and SDL2 handling audio, input, and windowing.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="circle-info" href="/introduction">
+    Learn what this project is, how it relates to the original game, and what's been reimplemented.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and run the engine on Linux or Windows in a few steps.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Build on Linux" icon="linux" href="/building/linux">
+    Full Linux build guide with CMake, SDL2, GLEW, and OpenGL dependencies.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Build on Windows" icon="windows" href="/building/windows">
+    Step-by-step Windows build guide using Visual Studio 2022 and CMake.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Explore the engine
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Engine Architecture" icon="layer-group" href="/architecture/overview">
+    Understand the subsystem layout: GameOS, rendering, game objects, sound, and effects.
+  </Card>
+  <Card title="GameOS Abstraction Layer" icon="microchip" href="/architecture/gameos">
+    The platform abstraction layer that bridges the game logic to OS, graphics, and input APIs.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/system-config">
+    Configure heap sizes, file paths, camera settings, and more via system.cfg.
+  </Card>
+  <Card title="Data Tools" icon="wrench" href="/configuration/data-tools">
+    Build game assets using aseconv, makefst, makersp, pak, and text_tool.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Contributing and development
 
-## Need inspiration?
+<CardGroup cols={2}>
+  <Card title="Contributing" icon="code-pull-request" href="/development/contributing">
+    How to fork, build, and submit improvements to the engine.
+  </Card>
+  <Card title="Debugging" icon="bug" href="/development/debugging">
+    Use Valgrind, GDB, and clang-analyzer to profile and debug the engine.
+  </Card>
+</CardGroup>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  The original MechCommander 2 game data is **not included** in this repository. You need a copy of the original game files. See the [data assets guide](/building/data-assets) for how to prepare and build game data.
+</Note>

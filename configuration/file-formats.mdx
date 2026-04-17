@@ -1,0 +1,218 @@
+---
+title: "MC2 Engine File Formats Reference"
+description: "Reference for MC2 file formats: FastFile archives, FITini config files, TGL/AGL geometry, PAK packets, RSP manifests, string resources, CSV, TGA, and BMP fonts."
+---
+
+The MechCommander 2 engine reads and writes a variety of proprietary and semi-standard file formats across its asset pipeline. Understanding each format is essential when building new content, modifying existing assets, or debugging load failures. This page documents the structure, purpose, and tooling for each format you will encounter.
+
+---
+
+## FITini (.cfg, .ini, .fit)
+
+FITini is the engine's own INI-style text configuration format, implemented in `mclib/inifile.h` via the `FitIniFile` class. It is used for `system.cfg`, object definition files, and various other configuration inputs read at runtime.
+
+**Structure:**
+
+```ini
+FITini
+
+[SectionName]
+ul unsignedLongKey = 3192000
+l  longKey         = -1
+f  floatKey        = 88.0
+st stringKey       = "some/path/"
+
+[AnotherSection]
+ul value = 42
+
+FITend
+```
+
+Every FITini file:
+
+- Must begin with `FITini` on the first line.
+- Must end with `FITend` as the final non-empty line.
+- Organizes keys into named sections enclosed in `[square brackets]`.
+- Prefixes each value with a type token:
+
+| Prefix | Type | Notes |
+|--------|------|-------|
+| `ul` | unsigned long | 32-bit unsigned integer |
+| `l` | long | 32-bit signed integer |
+| `f` | float | 32-bit IEEE float |
+| `st` | string | Quoted string value |
+
+- Supports `//` line comments.
+- Is read by `FitIniFile::seekBlock()` to position the parser at a named section, then `readIdFloat()`, `readIdLong()`, `readIdULong()`, `readIdString()`, and related methods to extract individual values.
+
+<Note>
+The name "FITini" appears to be a portmanteau of "FIT" (the internal project code) and "INI". The parser is strict about the `FITini`/`FITend` markers—files missing either token return error code `NOT_A_FITINIFILE` (`0xFADA0004`).
+</Note>
+
+---
+
+## FastFile (.fst)
+
+FastFile is the engine's primary compressed archive format for bundling game assets. At startup, the engine mounts up to `NumFastFiles` archives listed in `system.cfg`, and all subsequent file-open calls check the mounted archives before falling back to the filesystem.
+
+**Binary structure** (defined in `mclib/ffile.h`):
+
+```
+[4 bytes]  Version magic: 0xCADDECAF (uncompressed) or 0xFADDECAF (LZ-compressed)
+[4 bytes]  Number of files stored in the archive
+[N × FILEENTRY structs]  File entry table
+[file data blocks]
+```
+
+Each `FILEENTRY` record is:
+
+```cpp
+struct FILEENTRY {
+    DWORD offset;              // Byte offset of compressed data in the archive
+    DWORD size;                // Compressed (LZ) size in bytes
+    DWORD realSize;            // Uncompressed size in bytes
+    DWORD hash;                // ELF hash of the filename for fast lookup
+    char  name[250];           // Null-terminated filename stored in the archive
+};
+```
+
+**Key properties:**
+
+- All archives produced by the `makefst` tool are always LZ-compressed (magic `0xFADDECAF`). The tool forces compression unconditionally because uncompressed reading is not fully implemented in the current `ffile.cpp`.
+- Filenames stored inside the archive are hashed with `elfHash()` for O(1) lookup at runtime.
+- A single archive can hold any number of files; the default configuration uses 8 archives covering all asset categories.
+
+**Default archives:**
+
+| Archive | Primary contents |
+|---------|-----------------|
+| `mission.fst` | Mission scripts and scenario data |
+| `tgl.fst` | TGL binary 3D geometry objects |
+| `art.fst` | 2D art and sprite sheets |
+| `textures.fst` | Object and terrain textures |
+| `misc.fst` | Miscellaneous engine data |
+| `camera.fst` | Camera definition files |
+| `effect.fst` | Visual effect definitions |
+| `insignia.fst` | Unit insignia textures |
+
+You create and unpack `.fst` files with the [`makefst`](/configuration/data-tools) tool.
+
+---
+
+## TGL and AGL files
+
+TGL (Tiny Geometry Layer) and AGL files are the engine's binary 3D asset formats, produced by the `aseconv` tool from ASCII Scene Export (`.ase`) source files.
+
+- **TGL files** store the compiled geometry for a 3D shape: vertex positions, normals, UV coordinates, and material bindings in a format the engine's `TG_TypeMultiShape` class can load directly.
+- **AGL files** store animation data associated with a TGL shape, loaded by `TG_AnimateShape`.
+
+The converter reads object definition `.ini` files (also FITini format) from `data/tgl/`. Each definition references one or more `.ase` source files and optional animation sequences. The tool processes every INI file it finds under `prefixPath`, converts the referenced ASE geometry, and writes the binary TGL/AGL output.
+
+Mech objects follow a specific convention: the definition INI contains a `[Gestures0]` block that triggers the converter to iterate through all `MaxGestures` standard animation names automatically. Non-mech objects declare explicit `[Animation:N]` blocks instead.
+
+```
+data/tgl/
+  atlas.ini          ← object definition (FITini)
+  atlas.ase          ← 3D mesh (ASCII Scene Export from a modeling tool)
+  atlas_walk.ase     ← walk animation source
+  atlas_run.ase      ← run animation source
+  atlas.tgl          ← compiled geometry output (produced by aseconv)
+  atlas_walk.agl     ← compiled animation output
+```
+
+---
+
+## RSP files
+
+RSP (Response) files are plain-text file manifests—one filename per line—used as inputs to `makefst` and `pak`. They let you specify exactly which files to include in an archive rather than packing an entire directory.
+
+**Format:**
+
+```
+textures/mech_atlas_d.tga
+textures/mech_atlas_n.tga
+textures/terrain_grass.tga
+```
+
+- One relative file path per line.
+- Trailing whitespace on each line is stripped by the tools before hashing (a bug in early versions caused incorrect hash lookups when trailing spaces were present).
+- Blank lines are skipped.
+
+You generate RSP files with the [`makersp`](/configuration/data-tools) tool, which accepts a base path and one or more wildcard patterns.
+
+---
+
+## PAK files (PacketFile)
+
+PAK files are the engine's packet-based binary archive format, distinct from FastFile. While FastFile stores named files looked up by hash, a PAK file stores an ordered sequence of numbered packets accessed by index.
+
+**Usage pattern:**
+
+```
+pakFile->seekPacket(i);      // seek to packet N
+pakFile->readPacket(i, buf); // read raw bytes into buffer
+```
+
+**Packing:**
+
+PAK files require an RSP manifest listing the source files. Each line in the RSP corresponds to one packet in the output archive. Lines containing the literal string `<NULL>` produce null (zero-byte) packets, which serve as placeholders to preserve packet indices when a file is absent.
+
+Storage can be raw (`STORAGE_TYPE_RAW`) or zlib-compressed (`STORAGE_TYPE_ZLIB`). Like FastFile, the `pak` tool currently forces compression unconditionally.
+
+You create and unpack PAK files with the [`pak`](/configuration/data-tools) tool.
+
+---
+
+## String resource files
+
+The engine externalizes all user-visible strings to avoid hardcoding them in the binary. Strings are identified by integer IDs defined in `test_scripts/res_conv/resource.h` and stored as `IDS_*` constants.
+
+**Source files:**
+
+| File | Role |
+|------|------|
+| `resource.h` | `#define IDS_<NAME> <integer>` string ID constants |
+| `Script1.rc` | Windows resource script mapping each `IDS_*` to its text value |
+| `strings.res.h` | Generated C++ header with the `eStringIds` enum |
+| `strings.res.cpp` | Generated C++ source with the `StringRecords[]` array |
+
+**Generation:**
+
+The Perl script `test_scripts/res_conv/res_conv.pl` reads both `resource.h` and `Script1.rc`, then generates `strings.res.h` and `strings.res.cpp`. After running it, copy both output files into the `res/` directory:
+
+```bash
+cd test_scripts/res_conv
+perl res_conv.pl
+cp strings.res.h strings.res.cpp ../../res/
+```
+
+<Note>
+The `READ.ME` in `test_scripts/res_conv/` notes that you must pre-process `Script1.rc` with vim before running the Perl script to escape embedded double-quotes: run `:%s/""/\\"/g` in vim on the file first.
+</Note>
+
+The generated `StringRecords[]` array maps each `eStringIds` enum value to its human-readable string. The engine looks up strings at runtime by calling into this table using the integer ID.
+
+---
+
+## CSV files
+
+Several subsystems use comma-separated value files for game data tables, supported by `mclib/csvfile.h`. These are plain text files read line-by-line at load time. You can edit them with any text editor; the column layout is defined by the consuming subsystem.
+
+---
+
+## TGA files
+
+Textures throughout the game use the **Truevision TGA** (`.tga`) format. TGA is an uncompressed or RLE-compressed raster image format. The engine loads TGA files for:
+
+- Object and mech textures (referenced from TGL geometry)
+- Terrain tile textures
+- Sprite sheets and UI elements
+- Insignia overlays
+
+Use any image editor that exports TGA (Photoshop, GIMP, etc.) to create or modify textures. The engine expects either 24-bit (RGB) or 32-bit (RGBA) TGA files; confirm the bit depth the consuming system expects before converting.
+
+---
+
+## BMP files
+
+Font texture atlases produced by the `text_tool` are saved as BMP files alongside a corresponding `.glyph` binary that stores per-character metrics (advance width, UV coordinates, ascent). The engine uses both files together to render text at runtime.

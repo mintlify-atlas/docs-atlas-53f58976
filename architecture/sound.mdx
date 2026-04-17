@@ -1,0 +1,205 @@
+---
+title: "Sound System: SDL2_mixer Audio Backend"
+description: "How MC2's SoundSystem and GameSoundSystem replace DirectSound with SDL2_mixer, including channel layout, Betty warnings, radio messages, and known limitations."
+---
+
+The original MechCommander 2 engine used Microsoft DirectSound and DirectSound3D for all audio. The open-source port replaces that backend entirely with SDL2\_mixer while keeping the same `SoundSystem` C++ class interface that the rest of the engine already called. Game code in `code/` talks to `GameSoundSystem`, a subclass of `SoundSystem` defined in `mclib/soundsys.h`, and never touches SDL2 directly.
+
+## Architecture layers
+
+```
+code/gamesound.h          GameSoundSystem
+        │  inherits from
+mclib/soundsys.h          SoundSystem
+        │  calls gos_* audio API
+GameOS/gameos/gameos_sound.cpp   SDL2_mixer backend
+        │  wraps
+SDL2_mixer                Mix_Chunk / Mix_Music channels
+```
+
+`GameSoundSystem` extends `SoundSystem` with radio message queue management, the general alarm timer, and the in-mission voiceover channel. Everything below `SoundSystem` is hidden behind GameOS.
+
+## Channel layout
+
+`SoundSystem` allocates exactly `MAX_DIGITAL_SAMPLES = 16` SDL2\_mixer channels. Each channel has a fixed role:
+
+| Channel | Constant | Role |
+|---|---|---|
+| 0 | `RADIO_CHANNEL` | Pilot radio messages (queued via `GameSoundSystem`) |
+| 1–10 | — | General sound effect channels |
+| 11–12 | `AMBIENT_CHANNEL_START` + 0/1 | Ambient environmental loops (rain, wind) |
+| 13 | `SUPPORT_CHANNEL` | Support officer voice lines |
+| 14 | `BETTY_CHANNEL` | Betty — the on-board warning system voice |
+| 15 | `FIRE_CHANNEL` | Fire burning sound effects |
+
+Three additional stream channels (16, 17, 18) handle looping digital music streams and in-mission voiceovers:
+
+```cpp
+// mclib/soundsys.h
+#define STREAM1CHANNEL   16   // Background music stream 1
+#define STREAM2CHANNEL   17   // Background music stream 2
+#define STREAM3CHANNEL   18   // In-mission voiceover stream
+```
+
+`findOpenChannel(long start, long end)` scans the channel range for the first idle slot and is used for general SFX placement.
+
+## Volume constants
+
+```cpp
+#define MAX_DIGITAL_SAMPLES   16
+#define MAX_SAMPLE_VOLUME     127
+```
+
+Five independent volume controls exist, each stored as a static float on `SoundSystem`:
+
+| Getter/setter pair | Controls |
+|---|---|
+| `getSFXVolume` / `setSFXVolume` | General sound effects (channels 0–10) |
+| `getMusicVolume` / `setMusicVolume` | Digital music streams |
+| `getRadioVolume` / `setRadioVolume` | Pilot radio messages |
+| `getBettyVolume` / `setBettyVolume` | Betty warning system |
+| `getDigitalMasterVolume` / `setDigitalMasterVolume` | Master volume applied to all channels |
+
+These values are persisted in the player preferences file and can also be adjusted through the options screen at runtime.
+
+## Sound data files
+
+Sound assets are stored in packet files (`mclib/packet.h`) referenced by numeric IDs:
+
+- `soundDataFile` — main SFX library, loaded from the filename passed to `SoundSystem::init`.
+- `bettyDataFile` — Betty warning voice samples, accessed by `numBettySamples` sample IDs.
+- `supportDataFile` — support officer voice samples, accessed by `numSupportSamples` sample IDs.
+
+`preloadSoundBite(long sampleId)` loads a specific sample into the `SoundBite` cache to avoid a disk read on first play. Unpreloaded samples are loaded on demand during `playDigitalSample`.
+
+## Playing sounds
+
+```cpp
+// Positional SFX — pass a 3D world position for distance attenuation
+long playDigitalSample(
+    unsigned long sampleId,
+    Stuff::Vector3D pos = Stuff::Vector3D(-9999.0f, -9999.0f, -9999.0f),
+    bool allowDupes = false
+);
+
+// Looping digital music stream by music ID
+long playDigitalMusic(long musicId);
+
+// Streaming audio file by filename (for cinematics and briefings)
+long playDigitalStream(const char* streamName);
+
+// Betty warning system
+long playBettySample(unsigned long bettySampleId);
+void stopBettySample(void);
+
+// Support officer voice
+long playSupportSample(unsigned long supportSampleId,
+                       const char* fileName = NULL);
+```
+
+When `pos` is the sentinel value `(-9999, -9999, -9999)`, the sample plays at full volume with no distance falloff. Any other position causes the engine to compute a volume scalar based on the distance between the sound origin and the camera.
+
+<Warning>
+Sound panning and Doppler effects are not yet implemented in the SDL2\_mixer backend. Positional audio is limited to distance-based volume attenuation only. The `maxSoundDistance` field in `SoundSystem` controls the falloff range.
+</Warning>
+
+## Betty warning system
+
+Betty is the on-board computer voice that calls out tactical warnings during combat — low armor, enemy contact, objective updates. She has her own dedicated channel (`BETTY_CHANNEL = 14`) and her own preloaded audio cache (`bettySoundBite`, `bettyHandle`). Only one Betty sample plays at a time; a new call to `playBettySample` with a different ID first stops the current sample before starting the new one.
+
+```cpp
+// Typical Betty usage from game code
+soundSystem->playBettySample(BETTY_ARMOR_CRITICAL);
+```
+
+## Support officer voice
+
+The support officer uses channel 13 (`SUPPORT_CHANNEL`). Like Betty, only one support sample plays at a time. `playSupportSample` accepts either a numeric ID for samples in `supportDataFile` or an explicit filename for dynamic files generated at runtime.
+
+## Radio system
+
+`GameSoundSystem` (`code/gamesound.h`) extends `SoundSystem` with a radio message queue. It holds up to `MAX_QUEUED_MESSAGES = 8` pending `RadioData` messages. Each `RadioData` (defined in `code/radio.h`) can contain up to `MAX_FRAGMENTS = 16` audio fragments, allowing a single message to be assembled from separately recorded pieces (voice + noise).
+
+```cpp
+// code/gamesound.h
+class GameSoundSystem : public SoundSystem {
+protected:
+    RadioData*      currentMessage;
+    unsigned long   messagesInQueue;
+    RadioData*      queue[MAX_QUEUED_MESSAGES];
+    unsigned long   currentFragment;
+    unsigned long   playingNoise;
+    bool            wholeMsgDone;
+    HGOSAUDIO       radioHandle;
+    float           generalAlarmTimer;
+};
+```
+
+Each frame, `GameSoundSystem::update()` advances through the current message's fragments. When all fragments have played, `wholeMsgDone` becomes `true` and the next queued message begins. Radio messages play on `RADIO_CHANNEL = 0`.
+
+`code/radio.h` supports up to `MAX_RADIOS = 256` radio objects in the game world, each associated with a `MechWarrior` pilot.
+
+## ABL integration
+
+`SoundSystem` exposes ABL-callable wrappers that the scripting system registers via `ablmc2.cpp`:
+
+```cpp
+void playABLDigitalMusic(long musicId);
+void stopABLMusic(void);
+void playABLSFX(long sfxId);
+void playABLVideo(long videoId);
+void playABLSpeech(long pilotId, long speechId);
+```
+
+Mission scripts use these functions to play cutscene music, trigger ambient SFX at specific events, and queue pilot speech during scripted sequences.
+
+## GameOS SDL2_mixer backend
+
+At the GameOS level, `gameos_sound.cpp` wraps each `HGOSAUDIO` handle as a `gosAudio` object backed by a `Mix_Chunk`:
+
+```cpp
+// GameOS/gameos/gameos_sound.cpp
+class gosAudio {
+    SDL_AudioFormat fmt_;
+    int             channels_;
+    int             freq_;
+    uint8_t*        pdata_;
+    uint32_t        len_;
+public:
+    Mix_Chunk       mix_chunk_;   // SDL2_mixer plays from this
+};
+```
+
+The `SoundEngine` singleton manages the list of all live `gosAudio` objects and the SDL2\_mixer channel assignments. `Mix_PlayChannel` with the computed channel index plays each sample.
+
+## Sound configuration
+
+The `gosEnvironment` struct (`GameOS/include/gameos.hpp`) carries the initial sound configuration:
+
+```cpp
+bool  soundDisable;    // false = sound enabled, true = sound disabled
+bool  soundHiFi;       // true = 44 kHz, false = 22 kHz
+int   soundDevice;     // 0 = default output device
+int   soundChannels;   // number of mixer channels to open
+bool  soundMixInHardware; // hardware mixing hint (not used on Linux)
+```
+
+At runtime, additional paths are read from `system.cfg` via the mclib INI file reader. The `soundFileName` argument to `SoundSystem::init` points to the packet file that contains the SFX data. Modifying `system.cfg` lets you redirect the sound data path without recompiling.
+
+<Tip>
+If you are adding new sound assets, pack them into the packet file format used by `soundDataFile`, assign them sequential IDs, and update the total count in the corresponding data file header. The `preloadSoundBite` function can be called from `InitializeGameEngine` to front-load frequently played samples and avoid hitches during combat.
+</Tip>
+
+## Known limitations
+
+<AccordionGroup>
+  <Accordion title="No 3D panning">
+    SDL2\_mixer does not support per-sample stereo panning based on world-space position. All positional audio is mono with distance-based volume attenuation. Implementing proper panning would require routing through SDL2's audio callback directly or switching to a library such as OpenAL.
+  </Accordion>
+  <Accordion title="No Doppler effect">
+    The original DirectSound3D backend computed Doppler pitch shifting for fast-moving objects (missiles, racing mechs). The SDL2\_mixer replacement does not implement this. Pitch is fixed at the recorded sample rate.
+  </Accordion>
+  <Accordion title="Stream channel count">
+    The three stream channels (16, 17, 18) are allocated above the `MAX_DIGITAL_SAMPLES` limit and handled separately. If SDL2\_mixer is initialized with fewer than 19 channels, stream playback will silently fail. The initialization code in `gameos_sound.cpp` must request at least 19 channels.
+  </Accordion>
+</AccordionGroup>

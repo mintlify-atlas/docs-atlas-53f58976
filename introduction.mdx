@@ -1,0 +1,66 @@
+---
+title: "MechCommander 2: Open Source Engine Overview"
+description: "Open-source MC2 engine reimplementation built from published headers. Features OpenGL rendering, SDL2 audio and input, and a complete single-player campaign."
+---
+
+MechCommander 2 Open Source Engine is a community-built reimplementation of the closed MC2 engine, constructed entirely from the game's publicly released header (`.h`) interface files. The engine runs the full single-player campaign on both Linux and Windows in 64-bit mode, replacing the original DirectX graphics and audio pipeline with OpenGL, SDL2, and SDL2_mixer. It also fixes a number of bugs present in the original Microsoft release.
+
+## What this project is
+
+Microsoft released MechCommander 2 in 2001 and later published the game's source header files under the Shared Source Limited Permission License (see `EULA.txt` in the repository). This project uses those published interfaces to write a new, open-source engine implementation from scratch. The goal is a fully playable, cross-platform version of the game that preserves the original experience while running on modern hardware without relying on the original proprietary DirectX binaries.
+
+The engine project is separate from the game data. You need original MechCommander 2 game data files to run the engine — they are not included in this repository.
+
+## What has been implemented
+
+The following systems are fully working in the current codebase:
+
+- **Full single-player campaign** — all missions can be completed; the original game can be finished from start to end.
+- **OpenGL renderer** — the original DirectX 8 rendering pipeline has been replaced with an OpenGL-based renderer using GLEW, including shader-based lighting for geometry.
+- **SDL2 windowing and input** — keyboard, mouse, and windowing are handled via SDL2, replacing the original Windows-only input layer.
+- **SDL2_mixer audio** — background music and sound effects are routed through SDL2_mixer.
+- **Cross-platform 64-bit builds** — builds are supported on Linux (GCC/Clang) and Windows (MSVC via Visual Studio 2022), both in 64-bit mode.
+- **Bug fixes** — numerous bugs from the original game, including crashes and logic errors, have been identified and corrected.
+
+## What is not yet implemented
+
+Some parts of the engine are absent or incomplete:
+
+- **Networking** — multiplayer networking is not implemented. The UI code for lobby and game browser screens exists in the source (see `code/mpconnectiontype.cpp`, `code/mphostgame.cpp`, etc.), but no network transport layer has been written.
+- **Full sound panning and Doppler effects** — spatial audio features such as positional panning and Doppler shift are not yet supported in the SDL2_mixer backend.
+- **Memory heap finalisation** — some memory management work remains; there are known memory leaks related to incomplete heap implementation.
+
+## Licensing
+
+This project uses a dual-license structure:
+
+| Component | License |
+|---|---|
+| New engine code (this repository) | GNU General Public License v3 (GPL v3) — see `license.txt` |
+| Original MC2 game data files | Microsoft Shared Source Limited Permission License — see `EULA.txt` |
+| Third-party libraries (SDL2, GLEW, zlib, etc.) | Each library's own license |
+
+The GPL v3 applies to the new implementation code contributed to this repository. The original game's data assets and header files remain subject to Microsoft's EULA. You must comply with both licenses when building and running the engine.
+
+<Note>
+  The original MechCommander 2 game data files are **not included** in this repository and are required to run the engine. See the [data assets guide](/building/data-assets) for instructions on obtaining and preparing the game data.
+</Note>
+
+## Build guides
+
+Choose your platform to get the engine compiled and running:
+
+<CardGroup cols={2}>
+  <Card title="Build on Linux" icon="linux" href="/building/linux">
+    Install dependencies with your package manager and build with CMake and Make on any modern Linux distribution.
+  </Card>
+  <Card title="Build on Windows" icon="windows" href="/building/windows">
+    Set up third-party libraries and build with Visual Studio 2022 using the CMake generator.
+  </Card>
+  <Card title="Prepare game data" icon="database" href="/building/data-assets">
+    Clone the data source repository, build the asset pipeline tools, and assemble the game data files needed to run the engine.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    A condensed overview of all steps — clone, build, get data, and run — on either platform.
+  </Card>
+</CardGroup>

@@ -1,0 +1,116 @@
+---
+title: "MC2 Engine Architecture Overview"
+description: "A map of the MechCommander 2 open-source engine's subsystems, build targets, and the dependencies that connect them into a working game."
+---
+
+The MechCommander 2 open-source engine is organized as a collection of statically linked libraries built by CMake and joined into a single `mc2` executable. Each library owns a distinct concern — platform abstraction, rendering, particle effects, math utilities, GUI, or game logic — and the `code/` directory at the top of the source tree ties them all together. Understanding which library does what, and how data flows between them, is the starting point for any meaningful contribution to the engine.
+
+## Build targets
+
+The root `CMakeLists.txt` defines the following targets. The `mc2` executable links all of them.
+
+| Target | Source path | Role |
+|---|---|---|
+| `mc2` | `code/` | Game logic, mission system, object hierarchy, logistics |
+| `mclib` | `mclib/` | Terrain, texture manager, camera, sound system, ABL, actor rendering |
+| `gosfx` | `mclib/gosfx/` | Particle effects system (cards, clouds, tubes, shapes) |
+| `mlr` | `mclib/mlr/` | Mid-Level Renderer: geometry batching, clipping, state management |
+| `stuff` | `mclib/stuff/` | Math library: vectors, matrices, quaternions, memory streams |
+| `gui` | `gui/` | Screen and widget framework shared between menus and in-mission HUD |
+| `gameos` | `GameOS/gameos/` | Platform abstraction layer: graphics, input, audio, file I/O |
+| `gameos_main` | `GameOS/gameos/gameosmain.cpp` | Entry point and main loop |
+| `windows` | `GameOS/src/` | Windows-specific platform shim (also compiled on Linux for compatibility) |
+
+External dependencies resolved at configure time: SDL2, SDL2\_mixer, SDL2\_ttf, GLEW, OpenGL, and zlib.
+
+## Subsystem map
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                         mc2 executable                    │
+│                                                           │
+│  ┌──────────────┐   ┌─────────────┐   ┌───────────────┐  │
+│  │  code/       │   │  gui/       │   │  mclib/       │  │
+│  │  Game logic  │──▶│  Screens    │   │  Game library │  │
+│  │  Mission     │   │  Widgets    │   │  Terrain      │  │
+│  │  Objects     │   │  Logistics  │   │  Texture mgr  │  │
+│  │  ABL bridge  │   │  HUD        │   │  SoundSystem  │  │
+│  └──────┬───────┘   └─────────────┘   │  ABL runtime  │  │
+│         │                             │  Camera       │  │
+│         ▼                             └───────┬───────┘  │
+│  ┌──────────────────────────────────────┐     │           │
+│  │              GameOS                   │◀────┘           │
+│  │  Platform abstraction layer           │                 │
+│  │  (SDL2 / OpenGL / SDL2_mixer)        │                 │
+│  └──────────────────────────────────────┘                 │
+│                                                           │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────┐    │
+│  │  gosFX     │  │  MLR         │  │  stuff         │    │
+│  │  Particles │  │  Mid-Level   │  │  Math / memory │    │
+│  │  Effects   │  │  Renderer    │  │  streams       │    │
+│  └────────────┘  └──────────────┘  └────────────────┘    │
+└──────────────────────────────────────────────────────────┘
+```
+
+## How the subsystems relate
+
+<AccordionGroup>
+  <Accordion title="GameOS: the foundation">
+    Every subsystem above the operating system boundary calls GameOS APIs. The `gameos.hpp` header declares the `gosEnvironment` structure that the game fills out once at startup. GameOS then owns the main loop, calling `DoGameLogic` and `UpdateRenderers` on each tick. Graphics initialization, file I/O hooks, memory heap management, input polling, and audio device setup all live in `GameOS/gameos/`.
+
+    On Linux the backend is SDL2 for windowing and input, GLEW + OpenGL for rendering, and SDL2\_mixer for audio. The `platform_*.h` headers in `GameOS/include/` provide Windows type compatibility on non-Windows systems.
+  </Accordion>
+
+  <Accordion title="mclib: the game library">
+    `mclib` is the largest dependency of `code/`. It provides the terrain system (`terrain.h`, `terrtxm.h`, `terrtxm2.h`), the texture manager (`txmmgr.h`), the camera (`camera.h`), the sound system (`soundsys.h`), and the ABL scripting runtime (`abl.h`). It also includes actor rendering helpers (`bdactor.h`, `gvactor.h`, `mech3d.h`) that sit between the game object system and MLR/gosFX.
+  </Accordion>
+
+  <Accordion title="MLR and gosFX: rendering pipeline">
+    The Mid-Level Renderer (`mlr`) handles 3D geometry batching, frustum clipping, and render state management. It sits above GameOS's raw OpenGL calls and below the game's visual objects. `gosFX` builds on MLR to implement the particle effects system: cards, card clouds, point clouds, debris clouds, spinning clouds, tubes, and shapes. Both libraries use `stuff` for all math operations.
+  </Accordion>
+
+  <Accordion title="code/: game logic">
+    The `code/` directory contains the game object hierarchy rooted at `GameObject` (`gameobj.h`), the object manager (`objmgr.h`), the mission system (`mission.h`), and the logistics screens. It also hosts `ablmc2.cpp`, the bridge that registers MC2-specific functions with the ABL scripting environment so that mission scripts can spawn objects, set objectives, and trigger events.
+  </Accordion>
+
+  <Accordion title="ABL: in-engine scripting">
+    ABL (a custom scripting language included in mclib via `abl.h` and the ABL source files) runs mission logic. Each mission pairs a `.fit` scenario file with an ABL script. The script is compiled to bytecode and executed by `ABLModule` at runtime. `ablmc2.cpp` in `code/` registers all the MC2-specific ABL intrinsics — playing sounds, queuing radio messages, modifying objectives, spawning parts — that the mission author can call.
+  </Accordion>
+</AccordionGroup>
+
+## Main loop lifecycle
+
+<Steps>
+  <Step title="GetGameOSEnvironment">
+    Before any subsystem initializes, GameOS calls `GetGameOSEnvironment` (defined in `code/mechcmd2.cpp`). The game fills the `gosEnvironment` struct with screen resolution, sound settings, memory requirements, and the four callback pointers: `InitializeGameEngine`, `DoGameLogic`, `UpdateRenderers`, and `TerminateGameEngine`.
+  </Step>
+  <Step title="InitializeGameEngine">
+    GameOS calls this callback once after its own setup completes. The game allocates heaps, loads the texture manager, initializes the terrain system, starts the sound system, and prepares the logistics data.
+  </Step>
+  <Step title="DoGameLogic (per frame)">
+    On every tick GameOS calls `DoGameLogic`. The mission updates all game objects, runs pathfinding via the move manager, evaluates triggers and objectives, and processes ABL scripts. No rendering occurs here.
+  </Step>
+  <Step title="UpdateRenderers (per frame)">
+    After game logic, GameOS calls `UpdateRenderers`. The game submits geometry to MLR, renders terrain and objects through the texture manager, draws particle effects via gosFX, and presents the final frame via `gos_render`/SDL2.
+  </Step>
+  <Step title="TerminateGameEngine">
+    When the player quits or calls `gos_TerminateApplication`, GameOS calls `TerminateGameEngine`. All subsystems free their memory in reverse initialization order.
+  </Step>
+</Steps>
+
+## Explore the subsystems
+
+<CardGroup cols={2}>
+  <Card title="GameOS" icon="cpu" href="/architecture/gameos">
+    Platform abstraction: windowing, input, file I/O, memory heaps, and the SDL2 backend.
+  </Card>
+  <Card title="Rendering pipeline" icon="image" href="/architecture/rendering">
+    OpenGL shaders, MLR geometry batching, gosFX particles, terrain texturing, and the texture manager.
+  </Card>
+  <Card title="Game object system" icon="cubes" href="/architecture/game-objects">
+    The GameObject hierarchy, object manager, mission lifecycle, ABL scripting, and logistics.
+  </Card>
+  <Card title="Sound system" icon="volume-2" href="/architecture/sound">
+    SDL2\_mixer audio backend, channel layout, Betty and Support Officer voices, and radio messages.
+  </Card>
+</CardGroup>

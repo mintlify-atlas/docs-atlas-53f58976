@@ -1,0 +1,307 @@
+---
+title: "system.cfg: Engine Configuration Reference"
+description: "Complete reference for system.cfg, the FITini-format file that controls memory allocation, asset paths, FastFile archives, and camera bounds for the MC2 engine."
+---
+
+The `system.cfg` file is the primary configuration file for the MechCommander 2 open-source engine. It must reside in the same directory as the `mc2` executable. The engine reads it at startup to configure memory heaps, locate all game assets, register FastFile archives, and set camera angle limits. Editing it incorrectly—especially the camera section—can crash the engine, so read each section carefully before making changes.
+
+## File format
+
+`system.cfg` uses the **FITini** format, the engine's own INI-style configuration syntax implemented in `mclib/inifile.h`. Every valid FITini file:
+
+- Starts with the literal token `FITini` on the first line.
+- Ends with the literal token `FITend` on the last non-empty line.
+- Groups keys into named sections enclosed in square brackets, for example `[systemHeap]`.
+- Prefixes every value with a type token that tells the parser how to interpret the data.
+
+The supported type prefixes are:
+
+| Prefix | C++ type | Example |
+|--------|----------|---------|
+| `ul` | `unsigned long` | `ul systemHeapSize = 3192000` |
+| `l` | `long` | `l NumFastFiles = 8` |
+| `f` | `float` | `f MaxPerspective = 88.0` |
+| `st` | `string` | `st terrainPath = "data/terrain/"` |
+
+Line comments use `//` and are ignored by the parser.
+
+```ini
+FITini
+
+[SectionName]
+ul someKey = 12345
+st aPath = "data/subfolder/"
+
+FITend
+```
+
+---
+
+## [UseSound]
+
+Presence of this section header enables the sound system at startup. It contains no key-value pairs—the section header itself acts as a boolean flag.
+
+```ini
+[UseSound]
+```
+
+Remove or comment out the entire section to disable audio.
+
+---
+
+## [UseMusic]
+
+Presence of this section header enables in-game music. Like `[UseSound]`, it contains no key-value pairs.
+
+```ini
+[UseMusic]
+```
+
+---
+
+## [systemHeap]
+
+Controls the sizes of the engine's fixed memory heaps. All values are in bytes and use the `ul` (unsigned long) type prefix.
+
+```ini
+[systemHeap]
+ul systemHeapSize    = 3192000
+ul guiHeapSize       = 4096
+ul soundHeapSize     = 767999
+ul logisticsHeapSize = 16777215
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `systemHeapSize` | `3192000` | Main system heap used for general engine allocations (~3 MB). |
+| `guiHeapSize` | `4096` | Heap reserved for the user interface (~4 KB). |
+| `soundHeapSize` | `767999` | Heap reserved for sound data (~768 KB). |
+| `logisticsHeapSize` | `16777215` | Heap reserved for logistics/campaign data (~16 MB). |
+
+<Warning>
+Reducing these values below what the engine requires at runtime will cause heap allocation failures and crashes. Increase them if you add large amounts of new content.
+</Warning>
+
+---
+
+## [systemPaths]
+
+Maps each asset category to a relative directory on disk. All paths use the `st` (string) type prefix and are relative to the directory containing `mc2`. Paths must end with a trailing slash.
+
+```ini
+[systemPaths]
+st terrainPath    = "data/terrain/"
+st palettePath    = "data/palette/"
+st paletteName    = "palette"
+st artPath        = "data/art/"
+st fontPath       = "data/fonts/"
+st savePath       = "data/savegame/"
+st spritePath     = "data/sprites/"
+st shapesPath     = "data/sprites/"
+st soundPath      = "data/sound/"
+st objectPath     = "data/objects/"
+st cameraPath     = "data/cameras/"
+st tilePath       = "data/tiles/"
+st tile90Path     = "data/tiles/"
+st missionPath    = "data/missions/"
+st missionName    = "MechCmdr1"
+st warriorPath    = "data/missions/warriors/"
+st profilePath    = "data/missions/profiles/"
+st interfacepath  = "data/iface/"
+st moviepath      = "data/movies/"
+st tglpath        = "data/tgl/"
+st texturepath    = "data/textures/"
+st CDsoundPath    = "data/sound/"
+st CDmoviepath    = "data/movies/"
+st CDspritePath   = "data/sprites/"
+```
+
+<AccordionGroup>
+  <Accordion title="Core asset paths">
+    | Key | Default | Description |
+    |-----|---------|-------------|
+    | `terrainPath` | `data/terrain/` | Terrain tile and height-map data. |
+    | `palettePath` | `data/palette/` | Color palette files. |
+    | `paletteName` | `palette` | Base filename of the active palette (no extension). |
+    | `artPath` | `data/art/` | General 2D art assets. |
+    | `fontPath` | `data/fonts/` | Engine font files. |
+    | `savePath` | `data/savegame/` | Save-game read/write directory. |
+    | `spritePath` | `data/sprites/` | Sprite sheet assets. |
+    | `shapesPath` | `data/sprites/` | Shape data (shares the sprites directory by default). |
+    | `soundPath` | `data/sound/` | Sound effect and music files. |
+    | `objectPath` | `data/objects/` | Game object definition files. |
+  </Accordion>
+  <Accordion title="Camera, tile, and mission paths">
+    | Key | Default | Description |
+    |-----|---------|-------------|
+    | `cameraPath` | `data/cameras/` | Camera definition files. |
+    | `tilePath` | `data/tiles/` | Standard tile assets. |
+    | `tile90Path` | `data/tiles/` | 90-degree rotated tile variants (shares tiles directory by default). |
+    | `missionPath` | `data/missions/` | Mission scenario files. |
+    | `missionName` | `MechCmdr1` | Name of the active mission or campaign (no extension). |
+    | `warriorPath` | `data/missions/warriors/` | Pilot/warrior profile data. |
+    | `profilePath` | `data/missions/profiles/` | Player and AI profiles. |
+  </Accordion>
+  <Accordion title="Interface, movie, and 3D asset paths">
+    | Key | Default | Description |
+    |-----|---------|-------------|
+    | `interfacepath` | `data/iface/` | User interface layout and texture files. |
+    | `moviepath` | `data/movies/` | FMV and cutscene files. |
+    | `tglpath` | `data/tgl/` | TGL binary geometry files for 3D objects. |
+    | `texturepath` | `data/textures/` | Texture image files used by the renderer. |
+  </Accordion>
+  <Accordion title="CD-ROM fallback paths">
+    These paths are used when the engine's CD-check mode is active (`Environment.checkCDForFiles`). They point to the same directories as the local equivalents by default but can be redirected to a mounted CD image or network share.
+
+    | Key | Default | Description |
+    |-----|---------|-------------|
+    | `CDsoundPath` | `data/sound/` | CD-sourced sound files. |
+    | `CDmoviepath` | `data/movies/` | CD-sourced movie files. |
+    | `CDspritePath` | `data/sprites/` | CD-sourced sprite files. |
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## [FastFiles]
+
+Lists the FastFile (`.fst`) archives the engine mounts at startup. Each archive is a compressed bundle of game assets; the engine searches them before falling back to loose files on disk.
+
+```ini
+[FastFiles]
+l NumFastFiles = 8
+
+st File0 = "mission.fst"
+st File1 = "tgl.fst"
+st File2 = "art.fst"
+st File3 = "textures.fst"
+st File4 = "misc.fst"
+st File5 = "camera.fst"
+st File6 = "effect.fst"
+st File7 = "insignia.fst"
+```
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `NumFastFiles` | `l` | Total number of FastFile entries that follow. Must match the number of `FileN` keys. |
+| `File0`–`File7` | `st` | Filenames of the `.fst` archives to mount, in load order. |
+
+The eight default archives and their contents:
+
+| Archive | Contents |
+|---------|----------|
+| `mission.fst` | Mission scripts and scenario data. |
+| `tgl.fst` | TGL binary 3D geometry files. |
+| `art.fst` | General 2D art and sprite sheets. |
+| `textures.fst` | Object and terrain texture images. |
+| `misc.fst` | Miscellaneous engine data. |
+| `camera.fst` | Camera definition files. |
+| `effect.fst` | Visual effect definitions. |
+| `insignia.fst` | Unit insignia textures. |
+
+<Note>
+You can add more archives by incrementing `NumFastFiles` and adding the corresponding `FileN` keys. The engine loads archives in the order they are listed; later archives do not override earlier ones—the first match wins.
+</Note>
+
+---
+
+## [CameraSettings]
+
+Sets the angular and altitude limits for the in-game camera. All values use the `f` (float) type prefix.
+
+<Warning>
+The original comment in `system.cfg` reads: **"Mucking with these is a real easy way to crash the Game!!!"** Stay within the documented hard limits for each value.
+</Warning>
+
+```ini
+[CameraSettings]
+f MaxPerspective    = 88.0
+f MinPerspective    = 20.0
+f MaxOrtho          = 88.0
+f MinOrtho          = 20.0
+f AltitudeMinimum   = 560.0
+f AltitudeMaximumHi = 1600.0
+f AltitudeMaximumLo = 1500.0
+```
+
+| Key | Default | Hard limit | Description |
+|-----|---------|------------|-------------|
+| `MaxPerspective` | `88.0` | < `90.0` | Maximum tilt-up angle in perspective mode. Values at or above 90.0 will crash the engine. |
+| `MinPerspective` | `20.0` | ≥ `0.0` | Maximum tilt-down angle in perspective mode. Must not go below 0.0. |
+| `MaxOrtho` | `88.0` | < `90.0` | Maximum tilt-up angle in orthographic mode. Values at or above 90.0 will crash the engine. |
+| `MinOrtho` | `20.0` | ≥ `0.0` | Maximum tilt-down angle in orthographic mode. Must not go below 0.0. |
+| `AltitudeMinimum` | `560.0` | ≥ `100.0` | Maximum zoom-in distance. Cannot be less than 100.0. |
+| `AltitudeMaximumHi` | `1600.0` | > `AltitudeMinimum` | Maximum zoom-out distance when the camera is tilted fully up. Must exceed `AltitudeMinimum`. |
+| `AltitudeMaximumLo` | `1500.0` | ≥ `AltitudeMinimum` | Maximum zoom-out distance when the camera is tilted fully down. Must not be less than `AltitudeMinimum`. |
+
+---
+
+## Complete default system.cfg
+
+For reference, the complete default configuration file as shipped with the engine:
+
+```ini
+FITini
+
+[UseSound]
+
+[UseMusic]
+
+[systemHeap]
+ul systemHeapSize    = 3192000
+ul guiHeapSize       = 4096
+ul soundHeapSize     = 767999
+ul logisticsHeapSize = 16777215
+
+[systemPaths]
+
+st terrainPath   = "data/terrain/"
+st palettePath   = "data/palette/"
+st paletteName   = "palette"
+st artPath       = "data/art/"
+st fontPath      = "data/fonts/"
+st savePath      = "data/savegame/"
+st spritePath    = "data/sprites/"
+st shapesPath    = "data/sprites/"
+st soundPath     = "data/sound/"
+st objectPath    = "data/objects/"
+st cameraPath    = "data/cameras/"
+st tilePath      = "data/tiles/"
+st tile90Path    = "data/tiles/"
+st missionPath   = "data/missions/"
+st missionName   = "MechCmdr1"
+st warriorPath   = "data/missions/warriors/"
+st profilePath   = "data/missions/profiles/"
+st interfacepath = "data/iface/"
+st moviepath     = "data/movies/"
+st tglpath       = "data/tgl/"
+st texturepath   = "data/textures/"
+
+st CDsoundPath   = "data/sound/"
+st CDmoviepath   = "data/movies/"
+st CDspritePath  = "data/sprites/"
+
+[FastFiles]
+l NumFastFiles = 8
+
+st File0 = "mission.fst"
+st File1 = "tgl.fst"
+st File2 = "art.fst"
+st File3 = "textures.fst"
+st File4 = "misc.fst"
+st File5 = "camera.fst"
+st File6 = "effect.fst"
+st File7 = "insignia.fst"
+
+//Mucking with these is a real easy way to crash the Game!!!
+[CameraSettings]
+f MaxPerspective    = 88.0
+f MinPerspective    = 20.0
+f MaxOrtho          = 88.0
+f MinOrtho          = 20.0
+f AltitudeMinimum   = 560.0
+f AltitudeMaximumHi = 1600.0
+f AltitudeMaximumLo = 1500.0
+
+FITend
+```

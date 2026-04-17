@@ -1,0 +1,170 @@
+---
+title: "OpenGL Rendering Pipeline in MC2 Engine"
+description: "How the MC2 engine replaces its original DirectX pipeline with OpenGL, GLEW, GLSL shaders, gosFX particles, and MLR geometry batching."
+---
+
+The original MechCommander 2 rendered through DirectX 8 and the proprietary Blade rasterizer. The open-source port replaces that entire stack with OpenGL (loaded via GLEW), a set of hand-written GLSL shaders, and SDL2 for window management and buffer swap. The replacement is layered: GameOS provides raw OpenGL context management, MLR batches 3D geometry above that, gosFX drives particle effects on top of MLR, and the texture manager (`txmmgr.h`) arbitrates all texture uploads to the GPU.
+
+## Shader programs
+
+All GLSL shaders live in `shaders/`. Each program is a vertex/fragment pair. The naming convention encodes the geometry type and lighting model.
+
+<Tabs>
+  <Tab title="gos_tex_vertex_lighted">
+    Textured geometry with per-vertex lighting. Used for mechs, buildings, and other 3D objects that carry both a diffuse texture and vertex color/normal data.
+
+    ```glsl
+    // shaders/gos_tex_vertex_lighted.vert (key inputs)
+    layout(location = 0) in vec3 pos;
+    layout(location = 1) in vec3 normal;
+    layout(location = 2) in vec4 aRGBLight;   // baked vertex light
+    layout(location = 3) in vec2 texcoord;
+
+    layout (binding = 1, std140) uniform mesh_data {
+        vec4 ambient;
+        vec4 diffuse;
+    };
+
+    uniform mat4 wvp_;    // world-view-projection
+    uniform mat4 world_;
+    uniform mat4 view_;
+    uniform mat4 projection_;
+    uniform vec4 vp;      // viewport rect
+    ```
+
+    The vertex shader applies the WVP transform, reconstructs world-space position and normal, and calls `calc_light` from `include/lighting.hglsl` when `ENABLE_VERTEX_LIGHTING` is set. The base light value from `aRGBLight` is always applied.
+  </Tab>
+  <Tab title="gos_tex_vertex">
+    Textured geometry without the lighting include. Used for surfaces where lighting is baked into vertex colors rather than computed in the shader.
+
+    ```glsl
+    // shaders/gos_tex_vertex.vert
+    layout(location = 0) in vec4 pos;
+    layout(location = 1) in vec4 color;
+    layout(location = 2) in vec4 fog;
+    layout(location = 3) in vec2 texcoord;
+    uniform mat4 mvp;
+    ```
+  </Tab>
+  <Tab title="gos_text">
+    Text rendering. Uses the same vertex layout as `gos_tex_vertex` but projects with a standard MVP rather than the RHW-divided transform, keeping text in screen space.
+
+    ```glsl
+    // shaders/gos_text.vert
+    void main(void) {
+        gl_Position = mvp * vec4(pos.xyz, 1);
+        Color = color;
+        Texcoord = texcoord;
+    }
+    ```
+  </Tab>
+  <Tab title="gos_vertex_lighted">
+    Untextured vertex-lit geometry. Same lighting path as `gos_tex_vertex_lighted` but the fragment shader ignores texture coordinates.
+  </Tab>
+  <Tab title="gos_vertex">
+    Plain untextured vertices. The simplest shader: transforms position with MVP, passes color and fog through to the fragment stage.
+  </Tab>
+  <Tab title="object_tex">
+    Simple textured objects using OpenGL ES 3.0 (`#version 300 es`). Takes position and UV and applies a single `ModelViewProjectionMatrix`. Used for UI sprites and simple screen-space objects.
+
+    ```glsl
+    // shaders/object_tex.vert
+    #version 300 es
+    layout(location = 0) in vec3 pos;
+    layout(location = 1) in vec2 texcoord;
+    uniform mat4 ModelViewProjectionMatrix;
+    out vec2 tc;
+    void main(void) {
+        gl_Position = ModelViewProjectionMatrix * vec4(pos, 1);
+        tc = texcoord;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+The `gos_tex_vertex_lighted.vert` shader applies a viewport-space transform manually (dividing by `p.w` and scaling by the `vp` uniform) before feeding the result into the standard projection matrix. This matches the original engine's pre-transformed vertex convention and should not be simplified without testing against the game's HUD rendering.
+</Note>
+
+## Mid-Level Renderer (MLR)
+
+MLR (`mclib/mlr/`) is a geometry batching and clipping library inherited from the original Microsoft codebase. It sits between individual game objects and the raw OpenGL draw calls in GameOS. Key responsibilities:
+
+- **State management** — `MLRState` tracks the active texture, blend mode, z-write flag, and other render states. Batching consecutive draw calls with the same `MLRState` reduces redundant OpenGL state changes.
+- **Frustum clipping** — `MLRClipper` and `MLRClippingState` implement near/far and six-plane frustum clipping before submission to the GPU.
+- **Primitive types** — MLR supports indexed triangle lists and triangle strips. Each actor's geometry is stored in TGL/AGL binary format and loaded into MLR primitive objects.
+
+gosFX's `effect.hpp` `Effect` base class includes `<mlr/mlr.hpp>` directly, meaning every particle effect uses MLR for its draw calls.
+
+## gosFX particle effects
+
+The `gosFX` library (`mclib/gosfx/`) defines a class hierarchy of effect types, all sharing the version constant `CurrentGFXVersion = 17`. The class IDs are registered in `gosfx.hpp`:
+
+| Class ID | Effect type | Description |
+|---|---|---|
+| `EffectClassID` | `Effect` | Abstract base |
+| `ParticleCloudClassID` | `ParticleCloud` | Base cloud type |
+| `PointCloudClassID` | `PointCloud` | Unoriented point sprites |
+| `SpinningCloudClassID` | `SpinningCloud` | Rotating point sprites |
+| `ShardCloudClassID` | `ShardCloud` | Debris shards |
+| `PertCloudClassID` | `PertCloud` | Perturbed cloud (turbulence) |
+| `CardCloudClassID` | `CardCloud` | Billboard quad cloud |
+| `ShapeCloudClassID` | `ShapeCloud` | 3D mesh cloud |
+| `EffectCloudClassID` | `EffectCloud` | Nested effects |
+| `SingletonClassID` | `Singleton` | Single-instance base |
+| `CardClassID` | `Card` | Single billboard quad |
+| `ShapeClassID` | `Shape` | Single 3D mesh |
+| `TubeClassID` | `Tube` | Ribbon/trail geometry |
+| `DebrisCloudClassID` | `DebrisCloud` | Physical debris particles |
+| `PointLightClassID` | `PointLight` | Dynamic point light |
+
+Effects are serialized to and from binary streams using `ReadGFXVersion` / `WriteGFXVersion`. The `Effect__Specification` class (in `effect.hpp`) holds curve data describing how each parameter (size, color, opacity) evolves over the effect's lifetime. The runtime `Effect` objects read from these specifications each frame.
+
+gosFX uses its own `HGOSHEAP` (`gosFX::Heap`) for all allocations, keeping particle memory separate from other subsystems. Frame counters for each type (`Point_Count`, `Card_Count`, `Shape_Count`, etc.) are exposed as extern globals for performance profiling.
+
+## Terrain rendering
+
+The terrain system (`mclib/terrain.h`) operates on a grid with `MAX_MAP_CELL_WIDTH = 720` cells and three cells per tile (`CELLS_PER_TILE = 3`). Two texture atlas systems handle terrain surface textures:
+
+- `terrtxm.h` — the original MC2 terrain texture mapper, understanding the original packed format.
+- `terrtxm2.h` — a newer format that the terrain class also supports, enabling conversion between the two.
+
+The `Terrain` class reads height map data from `MapData`, computes vertex normals for lighting, and submits geometry to the texture manager in draw-order batches.
+
+## Texture manager
+
+`MC_TextureManager` (`mclib/txmmgr.h`) mediates between game assets and GameOS texture handles. Key constants:
+
+```cpp
+#define MC_MAXTEXTURES          4096
+#define MAX_MC2_GOS_TEXTURES    750
+#define TEXTURE_CACHE_SIZE      (40 * 1024 * 1024)  // 40 MB working set
+#define MAX_CACHE_SIZE          (40 * 1024 * 1024)  // hard limit
+#define CACHED_OUT_HANDLE       0xFFFFFACE           // sentinel for evicted textures
+```
+
+When a texture is needed and its `gosTextureHandle` is `CACHED_OUT_HANDLE`, the manager reloads it from disk (optionally LZ-compressed) before the draw call. Flags on each `MC_VertexArrayNode` distinguish terrain textures, alpha-blended surfaces, shadow geometry, craters, compass overlays, spotlight effects, and HUD elements:
+
+```cpp
+#define MC2_ISTERRAIN    1
+#define MC2_DRAWSOLID    2
+#define MC2_DRAWALPHA    4
+#define MC2_ISSHADOWS    8
+#define MC2_ISEFFECTS    16
+#define MC2_DRAWONEIN    32
+#define MC2_ISCRATERS    64
+#define MC2_ISCOMPASS    128
+#define MC2_ISSPOTLGT    256
+#define MC2_ISHUDLMNT    512
+#define MC2_ALPHATEST    1024
+```
+
+The manager sorts draw calls by flag group to minimize render-state switches. It also detects redundant texture loads by comparing filenames, allowing multiple game objects to share a single uploaded texture without re-reading from disk.
+
+<Warning>
+The texture cache size is set at compile time. Missions with a large number of unique terrain tiles or building textures can exhaust the 40 MB limit at runtime, causing continuous cache thrashing. If you add high-resolution asset variants, verify that `MAX_CACHE_SIZE` is sufficient or increase it in `txmmgr.h`.
+</Warning>
+
+## 3D geometry formats
+
+Game objects (mechs, buildings, ground vehicles) load geometry from TGL/AGL binary files. The `TG_RenderShape` type (forward-declared in `txmmgr.h`) holds the uploaded vertex and index buffers for a single level-of-detail mesh. The `MC_HardwareVertexArrayNode` struct provides the hardware vertex array path used by newer hardware-accelerated rendering, separating it from the older software-path `MC_VertexArrayNode`.

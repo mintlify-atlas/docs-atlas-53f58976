@@ -1,0 +1,103 @@
+---
+title: "Contributing to MechCommander 2 Engine"
+description: "How to fork, build, and contribute to the MC2 open source engine. Covers key improvement areas, coding conventions, and GPL v3 licensing requirements."
+---
+
+The MechCommander 2 open source engine is a community-maintained port of the original closed-source MC2 engine, rebuilt from the available interface headers and released under GPL v3. The project is considered functionally complete — the full campaign is passable on both Linux and Windows — but there is meaningful work left for contributors who want to improve rendering, memory management, distribution, and more.
+
+## Getting started
+
+To contribute, you need a working build of the engine first. Fork the repository on GitHub at [alariq/mc2](https://github.com/alariq/mc2), clone your fork locally, and follow the build instructions for your platform.
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork [alariq/mc2](https://github.com/alariq/mc2) on GitHub, then clone your fork:
+
+    ```bash
+    git clone https://github.com/<your-username>/mc2.git
+    cd mc2
+    ```
+  </Step>
+  <Step title="Build the engine">
+    Build the project using CMake. Refer to the platform-specific build pages for the full dependency list and configuration steps. For a standard debug build:
+
+    ```bash
+    mkdir build && cd build
+    cmake -DCMAKE_BUILD_TYPE=Debug ..
+    make -j$(nproc)
+    ```
+  </Step>
+  <Step title="Make your changes">
+    Work on your changes in a feature branch. Keep commits focused and well-described. If your change touches the renderer, memory allocator, or game logic, include notes about what you tested.
+  </Step>
+  <Step title="Open a pull request">
+    Push your branch to your fork and open a pull request against `alariq/mc2`. Describe what the change does, why it is needed, and how you verified it. Reference any relevant TODO items or known issues.
+  </Step>
+</Steps>
+
+## Areas where contributions are most needed
+
+The following areas have been explicitly identified by the project maintainer as needing work. Each represents a meaningful improvement to the engine's performance, correctness, or usability.
+
+<AccordionGroup>
+  <Accordion title="Memory management">
+    The engine's custom memory heap implementation is incomplete. Some allocations still go through the system allocator rather than the managed heaps, which means the engine cannot fully account for or reclaim all memory it uses. The goal is to route all allocations through the heap system to eliminate the remaining leaks.
+
+    **Relevant files:** `mclib/` heap implementation, `code/objmgr.cpp`
+  </Accordion>
+
+  <Accordion title="Rendering performance">
+    The renderer currently issues more draw calls than necessary. Batching geometry and reducing per-object draw calls would improve frame rates, particularly in mission scenarios with many units on screen.
+
+    Separately, the lighting pipeline is only partially moved to shaders. The remaining CPU-prelit vertex path should be replaced with a fully shader-based lighting model, which would also make it easier to improve visual quality going forward.
+  </Accordion>
+
+  <Accordion title="Priority queue optimization">
+    The AI pathfinding system uses a priority queue that has not been optimized or reimplemented for the current codebase. A more efficient implementation would reduce CPU time during mission planning and unit movement.
+  </Accordion>
+
+  <Accordion title="Graphics quality">
+    The renderer targets the original game's visual fidelity. Contributions to update the rendering quality — better texture handling, improved effects, or modern OpenGL usage — are welcome.
+  </Accordion>
+
+  <Accordion title="Network support">
+    Networking is not implemented. The original game supported multiplayer over LAN, but the network layer was not part of the open source release. Implementing network support is a large undertaking and would require designing the architecture from scratch.
+  </Accordion>
+
+  <Accordion title="Data distribution">
+    Playing the game requires obtaining the original data files and building them using the tools in the repository. Making this process easier — such as producing clean redistributable data packs — would make the project accessible to more people. See the [mc2srcdata repository](https://github.com/alariq/mc2srcdata) for the current state of this effort.
+  </Accordion>
+
+  <Accordion title="Compressed TGA loading">
+    The engine currently supports only uncompressed TGA files. Adding compressed TGA loading support would reduce asset sizes and allow the use of a broader range of texture assets.
+  </Accordion>
+</AccordionGroup>
+
+## Coding conventions
+
+The codebase targets **C++11** and uses a CMake-based build system. It compiles on both Linux (GCC and Clang) and Windows (MSVC via Visual Studio).
+
+<CardGroup cols={2}>
+  <Card title="Language standard" icon="code">
+    C++11. Use standard library types and RAII where appropriate. Avoid C-style casts when C++ alternatives exist.
+  </Card>
+  <Card title="Build system" icon="wrench">
+    CMake. All new source files must be added to the appropriate `CMakeLists.txt`. Do not add platform-specific build scripts outside of CMake.
+  </Card>
+  <Card title="Cross-platform" icon="monitor">
+    Code must compile on Linux and Windows without `#ifdef` sprawl. Use the existing platform abstraction layer in `GameOS/` for OS-specific behavior.
+  </Card>
+  <Card title="Debug builds" icon="bug">
+    Test changes with `-DCMAKE_BUILD_TYPE=Debug`. The debug configuration enables `_ARMOR`, `_DEBUG`, `BUGLOG`, and `LAB_ONLY` defines that activate assertions and logging.
+  </Card>
+</CardGroup>
+
+## Licensing
+
+The original game engine source was released under the Shared Source Limited Permission License (see `EULA.txt`). All new contributions to the port are licensed under **GPL v3** (see `license.txt`). Third-party libraries retain their own licenses.
+
+<Warning>
+  Do not submit code copied from proprietary sources or from the original closed-source game binaries. All contributed code must be original work or properly licensed under GPL-compatible terms.
+</Warning>
+
+By opening a pull request you agree that your contribution is licensed under GPL v3.

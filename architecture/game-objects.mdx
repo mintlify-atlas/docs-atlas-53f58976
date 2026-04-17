@@ -1,0 +1,183 @@
+---
+title: "Game Object System and Mission Logic"
+description: "The GameObject hierarchy, object manager, move manager, mission lifecycle, ABL scripting, logistics, save/load, and the team and commander systems."
+---
+
+Every entity that exists in a MechCommander 2 mission — from a 100-ton Atlas mech to a wooden crate — is a `GameObject`. The class hierarchy, object registry, pathfinding system, and mission orchestration layer work together to turn a static scenario file into a living battlefield. ABL scripts running inside the engine give mission designers fine-grained control over objectives, triggers, and AI behavior without recompiling the engine.
+
+## GameObject base class
+
+`GameObject` (`code/gameobj.h`) is the root of the entity hierarchy. Its fields capture everything the engine needs to simulate and render any in-world object:
+
+```cpp
+// code/gameobj.h
+class GameObject {
+public:
+    ObjectClass         objectClass;    // What kind of object is this?
+    GameObjectHandle    handle;         // Index into the master object table
+    int32_t             partId;         // Unique part number within the scenario
+    uint32_t            watchID;        // Reference ID used by the game engine
+
+    Stuff::Vector3D     position;       // World-space position
+    unsigned short      cellPositionRow;
+    unsigned short      cellPositionCol;
+    uint32_t            flags;          // GAMEOBJECT_FLAGS_* bitmask
+    unsigned char       status;         // Normal, disabled, destroyed, etc.
+
+    float               tonnage;
+    float               rotation;
+    AppearancePtr       appearance;     // Visual representation
+
+    float               explRadius;     // Explosion blast radius
+    float               explDamage;     // Explosion damage value
+    short               maxCV;          // Maximum combat value
+    short               curCV;          // Current combat value
+
+    // Per-frame virtual interface
+    virtual long update(void);
+    virtual void render(void);
+    virtual void renderShadows(void);
+};
+```
+
+The four attack source types defined in `gameobj.h` — `ATTACKSOURCE_WEAPONFIRE`, `ATTACKSOURCE_COLLISION`, `ATTACKSOURCE_DFA` (death from above), `ATTACKSOURCE_MINE`, and `ATTACKSOURCE_ARTILLERY` — feed into damage resolution for all object types.
+
+## Object hierarchy
+
+The following concrete classes derive from `GameObject` (directly or through intermediate classes):
+
+<AccordionGroup>
+  <Accordion title="Mech (code/mech.h, code/mover.h)">
+    `Mech` is the most complex game object. It inherits from `Mover`, which handles movement, pathfinding requests, and tactical orders. Key Mech-specific constants:
+
+    - Four hit arcs: `MECH_HIT_ARC_FRONT`, `MECH_HIT_ARC_REAR`, `MECH_HIT_ARC_LEFT`, `MECH_HIT_ARC_RIGHT`
+    - Three hit sections: `MECH_HIT_SECTION_TOP`, `MECH_HIT_SECTION_MIDDLE`, `MECH_HIT_SECTION_BOTTOM`
+    - Critical space counts per location: head (6), center torso (12), arm (12), leg (6)
+    - 25 gesture states: `MECH_GESTURE_PARK`, `MECH_GESTURE_STAND`, and 23 others controlling animation
+
+    Each `Mech` holds a `MechWarrior` (pilot) reference and a set of component slots that the logistics system populates before deployment.
+  </Accordion>
+
+  <Accordion title="Artillery (code/artlry.h)">
+    `Artillery` objects represent off-map strike assets. They do not have a persistent world position; instead they are triggered by ABL or player order and simulate an impact at a target location.
+  </Accordion>
+
+  <Accordion title="Building (code/bldng.h)">
+    `Building` objects are static structures. They can be destroyed, captured (for resource points), and set as objective targets. Their appearance uses the same TGL/AGL geometry pipeline as mechs.
+  </Accordion>
+
+  <Accordion title="Gate (code/gate.h)">
+    A `Gate` is a building subtype that can open and close, blocking or allowing movement through a passage. It interacts with the move manager's pathfinding grid.
+  </Accordion>
+
+  <Accordion title="GroundVehicle (code/gvehicl.h)">
+    `GroundVehicle` inherits from `Mover` and represents wheeled and tracked vehicles. It uses a simplified damage model compared to mechs (no critical hit tables).
+  </Accordion>
+
+  <Accordion title="Turret (code/turret.h)">
+    `Turret` is a fixed-emplacement weapon. It acquires targets within range, traverses to face them, and fires autonomously.
+  </Accordion>
+
+  <Accordion title="TerrainObject (code/terrobj.h)">
+    Trees, rocks, and other destructible or passability-affecting terrain features. They register with the collision system and can be destroyed by weapon fire.
+  </Accordion>
+
+  <Accordion title="WeaponBolt (code/weaponbolt.h)">
+    A `WeaponBolt` is a short-lived projectile object. It travels from attacker to target, resolves hit detection, and then is recycled. The `WeaponFireChunk` and `WeaponHitChunk` structs in `gameobj.h` carry the network-replication payload for multiplayer synchronization.
+  </Accordion>
+</AccordionGroup>
+
+## Object manager
+
+`ObjectManager` (`code/objmgr.h`) is the central registry for all live `GameObject` instances. It maintains separate lists for movers (mechs and vehicles), terrain objects, buildings, turrets, weapon bolts, and carnage objects. The mover list supports three operations defined by the `MOVERLIST_*` constants:
+
+- `MOVERLIST_DELETE` — remove a mover immediately
+- Create — add a new mover from a `Part` descriptor
+- Query — look up an object by handle or watch ID
+
+The object manager also owns the collision detection bookkeeping (`code/collsn.h`), grouping nearby objects into spatial blocks to limit the number of pairwise checks per frame.
+
+## Move manager and pathfinding
+
+`MoveManager` (`code/movemgr.h`) implements grid-based pathfinding over the terrain cell grid. It reads passability data from the terrain system (which cells are blocked by buildings, water, or elevation changes) and runs A\* to plan routes for movers. Movement orders flow from the `Commander` → `MoverGroup` → `Mover` → `MoveManager` chain. When a `Gate` opens or closes, the move manager rebuilds the affected portion of the passability grid.
+
+## Mission system
+
+`Mission` (`code/mission.h`) orchestrates a single scenario from load through teardown. Its lifecycle maps to the `MissionLoadType` enum:
+
+| Load type | Description |
+|---|---|
+| `MISSION_LOAD_SP_QUICKSTART` | Single-player skirmish, no logistics screen |
+| `MISSION_LOAD_SP_LOGISTICS` | Single-player campaign mission via logistics |
+| `MISSION_LOAD_MP_QUICKSTART` | Multiplayer skirmish |
+| `MISSION_LOAD_MP_LOGISTICS` | Multiplayer campaign mission |
+
+Each mission holds an array of `Part` structs (up to `numParts`) that describe the initial state of every spawned game object: position, rotation, team, commander ID, pilot assignment, and color overrides. A `Part` is consumed at load time to construct the actual `GameObject` instances via the object manager.
+
+Objectives are tracked through the `Objective` struct:
+
+```cpp
+// code/mission.h
+struct Objective {
+    char            name[80];
+    ObjectiveType   type;       // PrimaryGoal, SecondaryGoal, OtherGoal, BonusGoal
+    float           timeLeft;
+    ObjectiveStatus status;     // Incomplete, Success, Failed
+    Stuff::Vector3D position;
+    long            points;
+    float           radius;
+};
+```
+
+Up to `MAX_OBJECTIVES = 50` objectives can be active simultaneously. The mission evaluates outcome each update and sets `scenarioResult` to one of `mis_PLAYING`, `mis_PLAYER_LOST_BIG`, `mis_PLAYER_LOST_SMALL`, `mis_PLAYER_DRAW`, `mis_PLAYER_WIN_SMALL`, or `mis_PLAYER_WIN_BIG`.
+
+## ABL scripting
+
+ABL is the in-engine scripting language. Each mission script is compiled to bytecode and runs as an `ABLModule` (`mclib/abl.h`). The `Mission` class holds a pointer to the running module (`missionBrain`) and a callback entry point (`missionBrainCallback`) that receives per-tick control.
+
+`code/ablmc2.cpp` registers MC2-specific intrinsics that ABL scripts can call:
+
+- Spawning and despawning parts
+- Playing digital music, sound effects, and video clips
+- Modifying objective status and timers
+- Queuing radio messages from pilots
+- Controlling weather effects
+- Querying game state (team resources, unit health, mission time)
+
+```cpp
+// Typical ABL intrinsic registration pattern (ablmc2.cpp)
+// The ABL runtime calls these C++ functions when the script
+// invokes the corresponding ABL function by name.
+void ABL_playDigitalMusic(long musicId);
+void ABL_setObjectiveStatus(long objIndex, long status);
+void ABL_spawnPart(long partNum, ...);
+```
+
+<Info>
+ABL scripts are plain-text source files compiled at mission load time. You can find them alongside `.fit` mission data files. Modifying a script and relaunching the mission picks up the changes without recompiling the engine.
+</Info>
+
+## Logistics system
+
+The logistics screens (`code/logistics.h`, `code/logisticsdata.h`, `code/logisticsmech.h`) manage the inter-mission state:
+
+- **`LogisticsData`** — global campaign state: C-bills, salvage pool, unlocked mechs, completed missions.
+- **`LogisticsMech`** — a single mech in the player's inventory, including its variant (`LogisticsVariant`) and component loadout.
+- **`LogisticsPilot`** — pilot attributes, experience, and assignment to a mech slot.
+- **`LogisticsComponent`** — a weapon or equipment item that occupies critical spaces in a mech's hit locations.
+
+The mech bay screen (`code/mechbayscreen.h`) and mech lab screen (`code/mechlabscreen.h`) render the drag-and-drop component editing UI using the `gui` library.
+
+## Commander and team systems
+
+`Commander` (`code/comndr.h`) groups movers into tactical units under a single AI or human controller. Each Commander belongs to a `Team` (`code/team.h`). The engine supports up to `MAX_COMMANDERS` commanders across `MAX_TEAMS` teams. Friendly-fire rules, line-of-sight sharing, and victory conditions are all evaluated at the team level.
+
+`MoverGroup` (referenced from `comndr.h`) is the tactical formation unit — a squad of up to several movers that move, attack, and retreat together under tactical orders issued through `TacOrder` (`code/tacordr.h`).
+
+## Collision detection
+
+`code/collsn.h` implements the spatial hashing and pairwise collision tests between game objects. Movers register their bounding sphere with the collision system each frame. Weapon bolts query it to resolve impacts. The collision system also feeds back into the `ATTACKSOURCE_COLLISION` damage path when two movers occupy the same cell simultaneously.
+
+## Save and load
+
+`code/saveload.cpp` serializes and deserializes mission state for campaign checkpointing. It writes object positions, health values, objective statuses, and pilot experience to a binary packet file (`mclib/packet.h`) and reads them back on load, reconstructing the live object graph from stored data.

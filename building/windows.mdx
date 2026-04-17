@@ -1,0 +1,254 @@
+---
+title: "Build MC2 Engine on Windows with Visual Studio"
+description: "Set up third-party dependencies, generate a Visual Studio 2022 solution with CMake, and compile the MC2 engine and string resources DLL on Windows."
+---
+
+Building MC2 on Windows uses the same CMake-based workflow as Linux. You generate a Visual Studio solution file, open it, and build from there. The main preparation work is assembling the third-party libraries that CMake needs to find: SDL2, SDL2_mixer, SDL2_ttf, GLEW, and zlib.
+
+## Prerequisites
+
+- **Visual Studio 2022** with the "Desktop development with C++" workload installed
+- **CMake 3.10 or newer** — available from [cmake.org](https://cmake.org/download/) or bundled with Visual Studio
+- **Git** — to clone the repository
+- **GNUMake** (for building data later) — available from [gnuwin32.sourceforge.net](https://gnuwin32.sourceforge.net/packages/make.htm)
+
+## Setting up third-party dependencies
+
+You have two options for obtaining the required libraries. Option A is the fastest path; choose Option B if you need more control over library versions.
+
+<Tabs>
+  <Tab title="Option A: Use 3rdparty.zip (recommended)">
+    The repository includes `3rdparty.zip` at the root, which bundles pre-built libraries for both x86 and x64 in the correct directory layout.
+
+    1. Extract `3rdparty.zip` to a location of your choice — for example `C:\mc2-3rdparty\`.
+    2. Note the full path; you will pass it to CMake as `CMAKE_PREFIX_PATH` in the next section.
+
+    Skip ahead to [Compiling MC2](#compiling-mc2).
+  </Tab>
+  <Tab title="Option B: Build/download individually">
+    If you prefer to assemble the dependencies yourself, you need to create a directory tree that matches the layout CMake expects. A typical `3rdparty\` folder looks like this:
+
+    ```
+    3rdparty\
+    ├── bin\
+    ├── cmake\
+    │   ├── sdl2-config.cmake
+    │   ├── sdl2_mixer-config.cmake
+    │   └── sdl2_ttf-config.cmake
+    ├── include\
+    │   ├── zconf.h
+    │   ├── zlib.h
+    │   ├── GL\
+    │   │   ├── eglew.h
+    │   │   ├── glew.h
+    │   │   ├── glxew.h
+    │   │   └── wglew.h
+    │   └── SDL2\
+    │       └── (all SDL2 headers, including SDL_mixer.h and SDL_ttf.h)
+    └── lib\
+        ├── x64\
+        │   ├── glew32.lib
+        │   ├── glew32s.lib
+        │   ├── SDL2.dll / SDL2.lib / SDL2main.lib / SDL2test.lib
+        │   ├── SDL2_mixer.dll / SDL2_mixer.lib
+        │   ├── SDL2_ttf.dll / SDL2_ttf.lib
+        │   ├── zlib.dll / zlib.lib / zlibstatic.lib
+        └── x86\
+            └── (same files as x64)
+    ```
+
+    Follow these steps to populate it:
+
+    **zlib**
+
+    <Steps>
+      <Step title="Download zlib sources">
+        Download from the [GnuWin32 zlib page](https://gnuwin32.sourceforge.net/packages/zlib.htm).
+      </Step>
+      <Step title="Add a Windows-compatible unistd.h">
+        Download a minimal `unistd.h` for Windows and place it alongside the zlib source files. Open `zconf.h` and change `#include <unistd.h>` to `#include "unistd.h"`. Also comment out `#include <getopt.h>` and any integer type `typedef`s in the file.
+      </Step>
+      <Step title="Build for x86">
+        Open the **x86 Native Tools Command Prompt for VS 2022**, navigate to the zlib source directory, and run:
+
+        ```powershell
+        nmake -f win32\Makefile.msc
+        ```
+
+        Copy the resulting `.dll` and `.lib` files to `3rdparty\lib\x86\`.
+      </Step>
+      <Step title="Build for x64">
+        Delete the intermediate files, open the **x64 Native Tools Command Prompt for VS 2022**, and repeat the `nmake` command. Copy the outputs to `3rdparty\lib\x64\`.
+
+        Also copy `unistd.h` to `3rdparty\include\`.
+      </Step>
+    </Steps>
+
+    **SDL2, SDL2_mixer, SDL2_ttf**
+
+    Download the VC development packages for each library:
+
+    - SDL2 — [SDL2 releases on GitHub](https://github.com/libsdl-org/SDL/releases/tag/release-2.30.11) (`SDL2-devel-2.30.11-VC.zip`)
+    - SDL2_mixer — [SDL2_mixer releases on GitHub](https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.0/SDL2_mixer-devel-2.8.0-VC.zip)
+    - SDL2_ttf — [SDL2_ttf releases on GitHub](https://github.com/libsdl-org/SDL_ttf/releases/tag/release-2.24.0) (`SDL2_ttf-devel-2.24.0-VC.zip`)
+
+    For each package:
+    1. Copy the x86 and x64 `.lib` / `.dll` files into the corresponding `3rdparty\lib\x86\` and `3rdparty\lib\x64\` folders.
+    2. Copy all headers (including `SDL_mixer.h` and `SDL_ttf.h`) into `3rdparty\include\SDL2\`.
+    3. Copy the files from the package's `cmake\` folder into `3rdparty\cmake\`.
+
+    **GLEW**
+
+    Download pre-built binaries from [glew.sourceforge.net](https://glew.sourceforge.net/), or build from source using the `build\vs12\glew.sln` solution for both Win32 and x64. Place the headers in `3rdparty\include\GL\` and the libraries in the appropriate `lib\x86\` and `lib\x64\` directories.
+  </Tab>
+</Tabs>
+
+## Compiling MC2
+
+<Steps>
+  <Step title="Clone the repository">
+    ```powershell
+    git clone https://github.com/alariq/mc2.git
+    cd mc2
+    ```
+  </Step>
+
+  <Step title="Create a build directory and generate the solution">
+    Choose the architecture you want to target. Use absolute paths for `CMAKE_PREFIX_PATH`.
+
+    <Tabs>
+      <Tab title="x64 (recommended)">
+        ```powershell
+        md build64
+        cd build64
+        cmake.exe -G "Visual Studio 17 2022" `
+          -DCMAKE_PREFIX_PATH="C:\mc2-3rdparty" `
+          -DCMAKE_LIBRARY_ARCHITECTURE=x64 `
+          ..
+        ```
+      </Tab>
+      <Tab title="x86">
+        ```powershell
+        md build32
+        cd build32
+        cmake.exe -G "Visual Studio 17 2022" `
+          -DCMAKE_PREFIX_PATH="C:\mc2-3rdparty" `
+          -DCMAKE_LIBRARY_ARCHITECTURE=x86 `
+          ..
+        ```
+      </Tab>
+    </Tabs>
+
+    `CMAKE_LIBRARY_ARCHITECTURE` tells the build system which subdirectory (`x64` or `x86`) inside your `lib\` folder to use when searching for libraries.
+
+    <Note>
+      Earlier versions of the README reference `-G "Visual Studio 15 2017 Win64"`. Visual Studio 2022 uses `-G "Visual Studio 17 2022"` and controls the target architecture through `-A x64` (optional) or through the architecture flag above.
+    </Note>
+  </Step>
+
+  <Step title="Open and build the solution">
+    Open the generated `mc2.sln` from the build directory in Visual Studio 2022. Select the desired configuration (**Debug** or **Release**) and build the solution.
+
+    Alternatively, build from the command line:
+
+    ```powershell
+    cmake --build . --config Release
+    ```
+
+    This produces `mc2.exe` in the build directory.
+  </Step>
+
+  <Step title="Copy mc2.exe to your game folder">
+    Create a dedicated folder for the game executable — for example `C:\mc2exe\` — and copy `mc2.exe` there. You will also copy DLLs and data to this folder in later steps.
+  </Step>
+</Steps>
+
+## Building the string resources DLL
+
+The engine loads localised strings from `mc2res.dll`. You must build it separately from the `res/` subdirectory.
+
+<Steps>
+  <Step title="Generate the string source files">
+    The pre-generated `strings.res.cpp` and `strings.res.h` files live in `test_scripts\res_conv\`. If you need to regenerate them from the raw string data, run:
+
+    ```powershell
+    perl test_scripts\res_conv\res_conv.pl
+    ```
+
+    Then copy both files into the `res\` directory:
+
+    ```powershell
+    copy test_scripts\res_conv\strings.res.cpp res\
+    copy test_scripts\res_conv\strings.res.h   res\
+    ```
+
+    If you are not modifying string resources, the copies already present in `test_scripts\res_conv\` can be used directly — they are also referenced by the `res\CMakeLists.txt` via its include path.
+  </Step>
+
+  <Step title="Configure and build the res project">
+    <Tabs>
+      <Tab title="x64">
+        ```powershell
+        cd res
+        md build64
+        cd build64
+        cmake.exe -G "Visual Studio 17 2022" `
+          -DCMAKE_LIBRARY_ARCHITECTURE=x64 `
+          ..
+        cmake --build . --config Release
+        ```
+      </Tab>
+      <Tab title="x86">
+        ```powershell
+        cd res
+        md build32
+        cd build32
+        cmake.exe -G "Visual Studio 17 2022" `
+          -DCMAKE_LIBRARY_ARCHITECTURE=x86 `
+          ..
+        cmake --build . --config Release
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Copy mc2res.dll to your game folder">
+    Copy the resulting `mc2res_64.dll` (and its `.pdb` for debugging) from the build output directory to your game executable folder (e.g. `C:\mc2exe\`).
+  </Step>
+</Steps>
+
+## Building the data tools
+
+The data pipeline requires several tool binaries. These are built as part of the main CMake solution and can be found in the `data_tools` and `text_tool` subdirectories of the build output.
+
+The tools produced are:
+
+| Tool | Description |
+|---|---|
+| `aseconv` | Converts ASE model files for the engine |
+| `makefst` | Creates FastFile (`.fst`) archives |
+| `makersp` | Builds resource pack files |
+| `pak` | General-purpose pack/unpack tool (also called `mpak`) |
+| `text_tool` | Renders font glyphs to textures for the engine |
+
+After building the solution, copy the **Release** builds of all five tools to the `build_scripts\` folder in the `mc2srcdata` repository. See [Build and prepare MC2 game data assets](/building/data-assets) for the full data pipeline.
+
+## Copying required DLLs
+
+The engine and tools depend on several DLLs that must be present in the same directory as `mc2.exe`. Copy the following from your `3rdparty\lib\x64\` (or `x86\`) folder to your game executable folder:
+
+```
+SDL2.dll
+SDL2_mixer.dll
+SDL2_ttf.dll
+zlib.dll
+glew32.dll
+```
+
+<Warning>
+  Make sure the DLL architecture (x64 or x86) matches the architecture you compiled the engine for. Mixing 32-bit and 64-bit binaries will cause an immediate startup failure.
+</Warning>
+
+## Next step
+
+With the engine compiled, you need game data before you can run it. See [Build and prepare MC2 game data assets](/building/data-assets) for instructions on building the data tools and preparing the asset directories.

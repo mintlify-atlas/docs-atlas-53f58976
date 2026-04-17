@@ -1,0 +1,187 @@
+---
+title: "Build and prepare MC2 game data assets"
+description: "Build the data tool binaries from the mc2 repo, then use the mc2srcdata repository and make to produce the asset directories the engine expects."
+---
+
+The MC2 engine does not ship with game data. Asset files live in a separate repository, [alariq/mc2srcdata](https://github.com/alariq/mc2srcdata), and are produced by running `make` against a set of build scripts. Before you can run those scripts you must compile the data tool binaries from the main `mc2` repository and place them where the scripts can find them.
+
+<Warning>
+  The original MechCommander 2 game content is subject to the Shared Source Limited Permission License. Read `EULA.txt` in the mc2 repository before distributing any derived assets. The open source engine code (GPL v3) and the original game data have separate licenses.
+</Warning>
+
+## Overview
+
+The full pipeline has three stages:
+
+1. **Build the data tools** — compile `aseconv`, `makefst`, `makersp`, `pak`, and `text_tool` from the `mc2` repository.
+2. **Clone mc2srcdata** — obtain the source artwork, maps, and scripts.
+3. **Run `make all`** — the build scripts process source files and produce the asset directories and FastFile archives the engine loads at runtime.
+
+## Stage 1: Build the data tools
+
+The data tools are included in the main CMake build. Follow the [Linux](/building/linux) or [Windows](/building/windows) build guide to compile the full solution; the tool binaries are built automatically as part of that process.
+
+The CMake subdirectories involved are:
+
+- `data_tools/` — produces `aseconv`, `makefst`, `makersp`, and `pak`
+- `text_tool/` — produces `text_tool`
+
+<Steps>
+  <Step title="Build the mc2 project">
+    Complete the full engine build as described in the [Linux](/building/linux) or [Windows](/building/windows) guide. The data tools are compiled alongside the engine — no extra CMake flags are needed.
+
+    On Linux, after `make -j$(nproc)` in your build directory, you will find the binaries at paths like:
+
+    ```
+    build64/out/data_tools/aseconv
+    build64/out/data_tools/makefst
+    build64/out/data_tools/makersp
+    build64/out/data_tools/pak
+    build64/out/text_tool/text_tool
+    ```
+
+    On Windows, the Release binaries appear under the corresponding `out\data_tools\Release\` and `out\text_tool\Release\` subdirectories of your build folder.
+  </Step>
+
+  <Step title="Clone the mc2srcdata repository">
+    ```bash
+    git clone https://github.com/alariq/mc2srcdata.git
+    cd mc2srcdata
+    ```
+  </Step>
+
+  <Step title="Copy tool binaries to build_scripts/">
+    Copy the five tool binaries into the `build_scripts/` directory of the `mc2srcdata` repository. Use Release builds to keep processing times reasonable.
+
+    On Linux:
+
+    ```bash
+    cp path/to/build64/out/data_tools/aseconv   build_scripts/
+    cp path/to/build64/out/data_tools/makefst   build_scripts/
+    cp path/to/build64/out/data_tools/makersp   build_scripts/
+    cp path/to/build64/out/data_tools/pak       build_scripts/
+    cp path/to/build64/out/text_tool/text_tool  build_scripts/
+    ```
+
+    On Windows, also copy `glew32.dll` from your `3rdparty\lib\x64\` (or `x86\`) folder into `build_scripts\` — `aseconv` links against GLEW and needs the DLL at runtime:
+
+    ```powershell
+    copy C:\mc2-3rdparty\lib\x64\glew32.dll build_scripts\
+    ```
+  </Step>
+
+  <Step title="Read the mc2srcdata README">
+    Before running `make`, read `build_scripts\README.md` (or `README.txt`) inside the `mc2srcdata` repository. It describes any additional setup steps and any source artwork you may need to supply.
+  </Step>
+
+  <Step title="Run make all">
+    On Linux, run from the `build_scripts/` directory:
+
+    ```bash
+    cd build_scripts
+    make all
+    ```
+
+    On Windows, you need GNUMake in your `PATH`. Install it from [gnuwin32.sourceforge.net](https://gnuwin32.sourceforge.net/packages/make.htm), then run from a command prompt:
+
+    ```powershell
+    cd build_scripts
+    make all
+    # or, if make is not on PATH:
+    C:\GnuWin32\bin\make.exe all
+    ```
+
+    The build scripts invoke the tool binaries to convert source assets into the formats the engine expects.
+  </Step>
+
+  <Step title="Copy assets to your game folder">
+    After `make all` completes, copy the generated directories and configuration files to the same directory as your `mc2` (or `mc2.exe`) executable:
+
+    ```bash
+    # Copy the data and assets folders
+    cp -r assets  /path/to/mc2exe/
+    cp -r data    /path/to/mc2exe/
+
+    # Copy root-level configuration and archive files
+    cp *.cfg *.fst testtxm.tga /path/to/mc2exe/
+    ```
+  </Step>
+</Steps>
+
+## Asset directory structure
+
+The engine resolves all asset paths from `system.cfg`. The following directories must be present relative to the executable:
+
+| Path | Contents |
+|---|---|
+| `data/terrain/` | Terrain height maps and tile index files |
+| `data/palette/` | Colour palettes (`palette` file) |
+| `data/art/` | Sprites, unit artwork, and interface graphics |
+| `data/fonts/` | Bitmap font files |
+| `data/savegame/` | Save game slot directory (created at runtime if absent) |
+| `data/sprites/` | Sprite and shape resources |
+| `data/sound/` | Sound effects and music files |
+| `data/objects/` | Object definition files |
+| `data/cameras/` | Camera script data |
+| `data/tiles/` | Tile textures for terrain rendering |
+| `data/missions/` | Mission script files, warrior data, and pilot profiles |
+| `data/iface/` | User interface layout and image files |
+| `data/movies/` | Cutscene video files |
+| `data/tgl/` | TGL texture files used by the renderer |
+| `data/textures/` | Additional texture assets |
+
+<Note>
+  The `data/savegame/`, `data/missions/warriors/`, and `data/missions/profiles/` directories are written to at runtime. Make sure the user account running the engine has write permission to those paths.
+</Note>
+
+## FastFile archives
+
+The engine prefers to load assets from compressed FastFile (`.fst`) archives rather than loose files. `system.cfg` lists exactly eight archives that must be present alongside the executable:
+
+```
+mission.fst   — mission scripts and map data
+tgl.fst       — TGL texture library
+art.fst       — sprite and unit art
+textures.fst  — terrain and object textures
+misc.fst      — miscellaneous data files
+camera.fst    — camera scripts
+effect.fst    — particle and visual effects
+insignia.fst  — unit insignia textures
+```
+
+These archives are produced by `makefst` during the `make all` step in `mc2srcdata`. The `makefst` tool reads input file lists and writes compressed archives that the engine's FastFile system can mount at startup.
+
+<Info>
+  You can inspect or repack FastFile archives manually using the `makefst` binary directly. Run `makefst --help` (or without arguments) to see usage information.
+</Info>
+
+## String resources library
+
+The engine loads all user-visible strings from a shared library built from the `res/` subdirectory:
+
+- On Linux: `libmc2res_64.so` (or `libmc2res_32.so` for 32-bit)
+- On Windows: `mc2res_64.dll` (or `mc2res_32.dll` for 32-bit)
+
+The source files for this library — `strings.res.cpp` and `strings.res.h` — are generated by a Perl script:
+
+```bash
+perl test_scripts/res_conv/res_conv.pl
+```
+
+Pre-generated copies of these files are already committed to `test_scripts/res_conv/` so you do not need to run the script unless you are modifying the string data. Copy the files to `res/` and follow the build instructions in the [Linux](/building/linux) or [Windows](/building/windows) guide to produce the library, then place it alongside the `mc2` executable.
+
+## Verifying the setup
+
+After copying all files, your executable directory should contain at minimum:
+
+```
+mc2 (or mc2.exe)
+libmc2res_64.so (or mc2res_64.dll on Windows)
+system.cfg
+mission.fst  tgl.fst  art.fst  textures.fst
+misc.fst     camera.fst  effect.fst  insignia.fst
+testtxm.tga
+data/
+```
+
+Launch the engine from that directory. If a required file or directory is missing, the engine will report the path it was looking for based on the `[systemPaths]` section of `system.cfg`.

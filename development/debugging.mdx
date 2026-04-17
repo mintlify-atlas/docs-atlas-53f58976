@@ -1,0 +1,203 @@
+---
+title: "Debugging and profiling the MC2 engine"
+description: "Step-by-step instructions for debug builds, Valgrind memory checking, Callgrind profiling, and Clang static analysis on the MC2 engine."
+---
+
+The MC2 engine supports several debugging and profiling workflows, ranging from standard debug builds with extra assertions to Valgrind memory analysis and Clang static analysis. This page documents the commands and configuration used by the project maintainer, drawn from `devdoc.txt` and the build system.
+
+## Debug build configuration
+
+The CMake build system defines four preprocessor macros exclusively in `Debug` builds (see `CMakeLists.txt:43`):
+
+| Macro | Effect |
+|---|---|
+| `_ARMOR` | Enables armor/assertion checks throughout the engine |
+| `_DEBUG` | Activates debug-only code paths and logging |
+| `BUGLOG` | Enables the bug log output system |
+| `LAB_ONLY` | Enables laboratory/development-only features |
+
+To produce a debug build:
+
+```bash
+mkdir build-dbg && cd build-dbg
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make -j$(nproc)
+```
+
+<Note>
+  `CMAKE_EXPORT_COMPILE_COMMANDS=ON` is set unconditionally in `CMakeLists.txt:23`, so `compile_commands.json` is always generated in your build directory. This file is used by clangd, clang-tidy, and other tooling automatically.
+</Note>
+
+The `RelWithDebInfo` build type gives you optimized code with debug symbols, which is useful for profiling. Build it with:
+
+```bash
+mkdir build-reldbginfo && cd build-reldbginfo
+cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+make -j$(nproc)
+```
+
+## Valgrind memory checking
+
+Use Valgrind's Memcheck tool to detect memory errors such as invalid reads and writes, use-after-free, and leaks. The repository includes two suppression files under `misc/` to silence known false positives from graphics drivers:
+
+- `misc/valgrind.supp` — suppresses i965 Mesa DRI driver leaks
+- `misc/valgrind-fglrx.supp` — suppresses AMD fglrx DRI driver issues (ioctl params, conditional jumps, uninitialized values)
+
+<Steps>
+  <Step title="Start the engine under Valgrind with GDB server enabled">
+    Run the following from the repository root. The `--vgdb=yes --vgdb-error=0` flags pause execution immediately so you can attach GDB before any errors occur.
+
+    ```bash
+    valgrind \
+      --suppressions=./misc/valgrind-fglrx.supp \
+      --gen-suppressions=yes \
+      --vgdb=yes \
+      --vgdb-error=0 \
+      ./build-dbg/mc2
+    ```
+
+    Pass `--suppressions=./misc/valgrind.supp` instead if you are using an Intel i965 Mesa driver, or supply both files with two `--suppressions=` flags.
+  </Step>
+  <Step title="Attach GDB in a second terminal">
+    Open a second terminal and connect GDB to the Valgrind GDB server:
+
+    ```bash
+    gdb mc2
+    ```
+
+    Then at the GDB prompt:
+
+    ```text
+    (gdb) target remote | vgdb
+    ```
+
+    You can now step through execution, inspect memory, and examine Valgrind reports in real time.
+  </Step>
+</Steps>
+
+<Tip>
+  Use `--gen-suppressions=yes` during initial investigation to automatically generate suppression blocks for new driver-level noise. Paste any relevant entries into `misc/valgrind.supp` to keep future runs clean.
+</Tip>
+
+## Performance profiling with Callgrind
+
+Callgrind records instruction counts and simulated cache behavior, giving you a detailed picture of where the engine spends CPU time. Use `kcachegrind` to visualize the results.
+
+<Steps>
+  <Step title="Run the engine under Callgrind">
+    Use the `RelWithDebInfo` build so that symbol names are present in the output:
+
+    ```bash
+    valgrind --tool=callgrind --cache-sim=yes ./build-reldbginfo/mc2
+    ```
+
+    Callgrind starts with instrumentation enabled by default. Let the game run through the scenario or section you want to profile.
+  </Step>
+  <Step title="Stop instrumentation at the right moment">
+    Once you have passed the area of interest, turn off instrumentation from another terminal to avoid accumulating noise:
+
+    ```bash
+    callgrind_control -i off
+    ```
+  </Step>
+  <Step title="Visualize the profile data">
+    Callgrind writes a `callgrind.out.<pid>` file. Open it with kcachegrind:
+
+    ```bash
+    kcachegrind callgrind.out.<pid>
+    ```
+
+    The call graph and flat profile views let you identify hotspots, expensive call chains, and cache miss candidates.
+  </Step>
+</Steps>
+
+## Clang static analysis
+
+You can run Clang's static analyzer over the codebase to find bugs that the compiler does not catch at build time. There are two approaches: using `clang++` directly as the compiler, or using the `scan-build` wrapper.
+
+<Tabs>
+  <Tab title="Direct clang++ build">
+    Configure CMake to use `clang++` as the compiler:
+
+    ```bash
+    cmake \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_CXX_COMPILER=/path/to/llvm-build/bin/clang++ \
+      ..
+    ```
+
+    Then build normally with `make`. Clang will emit static analysis warnings inline during compilation.
+  </Tab>
+  <Tab title="scan-build wrapper">
+    Use the `c++-analyzer` wrapper to run the full static analyzer and collect an HTML report:
+
+    ```bash
+    cmake \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_CXX_COMPILER=/path/to/llvm-build/libexec/c++-analyzer \
+      ..
+    ```
+
+    Then build:
+
+    ```bash
+    make -j$(nproc)
+    ```
+
+    The analyzer writes an HTML report to a `report-*` directory in your build folder. Open `index.html` in a browser to browse findings by category.
+  </Tab>
+</Tabs>
+
+### IDE integration with compile_commands.json
+
+Since `CMAKE_EXPORT_COMPILE_COMMANDS` is always on, `compile_commands.json` is available for clangd and other LSP-based editors. Use `export_clang_paths.sh` to point your shell environment at the LLVM toolchain:
+
+```bash
+source export_clang_paths.sh
+```
+
+This exports the following variables:
+
+```bash
+export CC=/path/to/llvm-build/libexec/ccc-analyzer
+export CXX=/path/to/llvm-build/libexec/c++-analyzer
+export CCC=/path/to/llvm-build/bin/clang
+export CCC_CXX=/path/to/llvm-build/bin/clang++
+export LD=/path/to/llvm-build/bin/clang++
+```
+
+Edit the paths in `export_clang_paths.sh` to match your local LLVM installation before sourcing.
+
+## Memory corruption investigation
+
+When you suspect heap corruption rather than a simple leak, the following tools can help narrow down the source.
+
+<Tabs>
+  <Tab title="Linux">
+    Valgrind Memcheck (described above) is the primary tool. For deeper heap analysis, refer to the techniques documented at:
+
+    [Linux Applications Debugging Techniques — Heap corruption](https://en.wikibooks.org/wiki/Linux_Applications_Debugging_Techniques/Heap_corruption)
+
+    Address Sanitizer is also an option if you rebuild with `-fsanitize=address -fno-omit-frame-pointer` (see the commented flag in `CMakeLists.txt:32`).
+  </Tab>
+  <Tab title="Windows">
+    On Windows, use the following Microsoft tools:
+
+    - **`pageheap.exe`** — enables page heap checking to catch heap overflows and use-after-free at the allocation boundary
+    - **Application Verifier** — Microsoft's runtime verification tool; enable heap checks in the GUI
+    - **`gflags.exe`** — low-level global flags utility; use the `+hpa` flag to enable page heap for a specific executable
+
+    These are part of the Windows SDK and Debugging Tools for Windows.
+  </Tab>
+</Tabs>
+
+## The ENTER_DEBUGGER macro
+
+The codebase contains an `ENTER_DEBUGGER` macro used in assertion and error-handling paths. Its behavior is platform-specific:
+
+- **Linux:** raises `SIGTRAP`, which causes GDB to break at the exact call site
+- **Windows:** calls `DebugBreak()`, which triggers an INT 3 breakpoint
+
+When you hit this macro under GDB, use `backtrace` to inspect the call stack and identify the failing code path.

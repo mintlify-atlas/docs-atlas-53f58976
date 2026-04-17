@@ -1,0 +1,331 @@
+---
+title: "MC2 Asset Pipeline and Data Tool Reference"
+description: "Build and use the MC2 data tools: aseconv, makefst, makersp, pak, and text_tool. Covers flags, usage examples, and string resource generation."
+---
+
+The MechCommander 2 open-source engine ships several standalone command-line tools under `data_tools/` and `text_tool/` that you use to build the game's binary asset archives from source files. These tools are compiled alongside the engine and must be run before launching the game against freshly exported or modified source data. This page documents each tool's purpose, command-line interface, and typical usage patterns.
+
+---
+
+## Building the tools
+
+All data tools are defined as CMake targets in `data_tools/CMakeLists.txt` and `text_tool/CMakeLists.txt`. Build them from your existing build directory alongside the main engine:
+
+```bash
+mkdir build64 && cd build64
+cmake .. -DCMAKE_PREFIX_PATH=/path/to/deps
+make aseconv makefst makersp pak text_tool
+```
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    cmake .. \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH=/path/to/deps
+    make -j$(nproc) aseconv makefst makersp pak text_tool
+    ```
+  </Tab>
+  <Tab title="Windows (MSVC)">
+    ```bat
+    cmake .. -DCMAKE_PREFIX_PATH=C:\path\to\deps
+    cmake --build . --config Release --target aseconv makefst makersp pak text_tool
+    ```
+    <Note>
+    On Windows, `glew32.dll` must be present in the same directory as the tool executables (or on your `PATH`) because `aseconv` and `text_tool` link against GLEW at runtime.
+    </Note>
+  </Tab>
+</Tabs>
+
+**CMake dependencies by tool:**
+
+| Tool | Required libraries |
+|------|--------------------|
+| `aseconv` | mclib, gosfx, mlr, stuff, gameos, windows, ZLIB, SDL2, GLEW, OpenGL |
+| `makefst` | mclib, stuff, gameos, windows, ZLIB, SDL2 |
+| `makersp` | mclib, stuff, gameos, windows, ZLIB, SDL2 |
+| `pak` | mclib, stuff, gameos, windows, ZLIB, SDL2 |
+| `text_tool` | gameos, windows, SDL2, SDL2\_ttf, GLEW, OpenGL |
+
+After building, copy the tool executables into your `build_scripts/` folder (if you are using the mc2srcdata build scripts) so the build scripts can locate them without additional path configuration.
+
+---
+
+## aseconv
+
+`aseconv` converts 3D assets from ASCII Scene Export (`.ase`) format—as exported by 3D modeling tools such as 3ds Max—into the engine's binary TGL geometry and AGL animation formats.
+
+**Source:** `data_tools/aseconv.cpp`
+
+**Usage:**
+
+```bash
+aseconv <-file file.ase | -prefix-path /path/to/ase/files/> \
+        [-list list_file] \
+        [-dst-path /path/to/output/] \
+        [-arm]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-file <file.ase>` | Convert a single ASE source file. The tool derives the prefix path from the file's directory and looks for a matching `.ini` object definition alongside it. |
+| `-prefix-path <path>` | Convert all objects found under the given directory by scanning for `*.ini` object definition files. |
+| `-list <list_file>` | Read a list of ASE files to convert from a text file (one path per line). |
+| `-dst-path <path>` | Write output TGL/AGL files to this directory. Defaults to `./`. |
+| `-arm` | Create an ARM (Asset Relationship Map) provider record alongside the converted output. |
+
+**How it works:**
+
+When given `-prefix-path`, the tool scans for `*.ini` object definition files. Each `.ini` is a FITini-format file opened via `FitIniFile`. The tool seeks to the `[TGLData]` block, reads the `FileName` key (or `FileName0`, `FileName1`, … for LOD variants), and constructs the path to the corresponding `.ase` file. It then:
+
+1. Loads the base shape via `TG_TypeMultiShape::LoadTGMultiShapeFromASE()`.
+2. Optionally loads a shadow shape (`ShadowName` key) and a damaged variant (`[TGLDamage]` block).
+3. Iterates `[Animation:N]` blocks for explicit animations, loading each via `TG_AnimateShape::LoadTGMultiShapeAnimationFromASE()`.
+4. For mech objects (those containing a `[Gestures0]` block), automatically iterates all `MaxGestures` standard animation names using a naming convention derived from the mech's base filename.
+
+**Example:**
+
+```bash
+# Convert all objects in data/tgl/, writing output to the same directory
+aseconv -prefix-path data/tgl/ -dst-path data/tgl/
+
+# Convert a single ASE file
+aseconv -file data/tgl/atlas.ase -dst-path data/tgl/
+```
+
+---
+
+## makefst
+
+`makefst` creates and unpacks FastFile (`.fst`) compressed archives. The engine mounts these archives at startup to load game assets without accessing individual loose files.
+
+**Source:** `data_tools/makefst.cpp`
+
+**Usage:**
+
+```bash
+makefst [-d] [-c] <-f pak_file> [-p path] [-m mount_path] [-rsp rsp_file]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f <file.fst>` | **Required.** Path to the FastFile archive to create or unpack. |
+| `-d` | Unpack mode: extract all files from the archive to the output path. |
+| `-p <path>` | Base path. When packing: the root directory to pack files from. When unpacking: the output directory for extracted files. Defaults to `.`. |
+| `-m <mount_path>` | Mount path prefix: store files inside the archive under this path prefix instead of their on-disk relative paths. |
+| `-rsp <file.rsp>` | RSP manifest file listing specific files to pack (one per line). If omitted, packs all files found recursively under `-p`. |
+| `-c` | Compress output (currently forced on regardless of this flag). |
+
+<Note>
+Compression is always enabled when packing. The `-c` flag is accepted but has no effect because the engine's FastFile reader only supports the LZ-compressed format.
+</Note>
+
+**Packing examples:**
+
+```bash
+# Pack all files under data/textures/ into textures.fst
+makefst -f textures.fst -p data/textures/
+
+# Pack files listed in textures.rsp, storing them under the "data/textures" prefix
+makefst -f textures.fst -p data/textures/ -m data/textures -rsp textures.rsp
+```
+
+**Unpacking example:**
+
+```bash
+# Extract all files from mission.fst into the ./extracted/ directory
+makefst -d -f mission.fst -p extracted/
+```
+
+When unpacking, `makefst` recreates the directory structure stored inside the archive under `<out_path>/<archive_name>/`.
+
+---
+
+## makersp
+
+`makersp` generates RSP manifest files by scanning a directory tree and collecting filenames that match one or more wildcard patterns. The resulting `.rsp` file is used as input to `makefst` or `pak`.
+
+**Source:** `data_tools/makersp.cpp`
+
+**Usage:**
+
+```bash
+makersp -rsp <output.rsp> -p <base_path> -w <wildcard> [-w <wildcard> ...]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-rsp <file.rsp>` | **Required.** Path to write the generated RSP manifest. |
+| `-p <base_path>` | **Required.** Root directory to search for files. |
+| `-w <wildcard>` | **Required (at least one).** Wildcard pattern relative to `-p`, for example `*.tga` or `subfolder/*.tga`. Repeat for multiple patterns. |
+
+**Example:**
+
+```bash
+# Generate a manifest of all .tga files in data/textures/
+makersp -rsp textures.rsp -p data/textures/ -w "*.tga"
+
+# Include multiple subdirectories and types
+makersp -rsp art.rsp -p data/art/ -w "*.tga" -w "icons/*.tga" -w "ui/*.bmp"
+```
+
+The output RSP file contains one relative path per line, with paths relative to the base path provided to the tool. You then pass this file to `makefst` or `pak` with their `-rsp` flag.
+
+---
+
+## pak
+
+`pak` creates and unpacks PacketFile (`.pak`) archives. Unlike FastFile, a PacketFile stores an ordered sequence of numbered packets accessed by integer index rather than by filename hash.
+
+**Source:** `data_tools/pak.cpp`
+
+**Usage:**
+
+```bash
+pak [-d] [-c] <-f pak_file> [-r rsp_file] [-p path]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f <file.pak>` | **Required.** Path to the PAK archive to create or unpack. |
+| `-d` | Unpack mode: extract all packets from the archive into separate `packet_N` files. |
+| `-r <file.rsp>` | RSP manifest listing the files to pack, one per line. **Required when packing.** |
+| `-p <path>` | Output directory for unpacked files. Defaults to `.`. |
+| `-c` | Compress output (currently forced on). |
+
+**RSP conventions for pak:**
+
+- Each line in the RSP becomes one numbered packet in the output archive, in order.
+- A line containing exactly `<NULL>` produces a zero-byte null packet, preserving the packet index for files that do not exist on disk.
+- Backslashes in paths are normalized to the platform separator automatically.
+
+**Packing example:**
+
+```bash
+pak -f objects.pak -r objects.rsp
+```
+
+**Unpacking example:**
+
+```bash
+pak -d -f objects.pak -p extracted/
+```
+
+Unpacked packets are written as `packet_0`, `packet_1`, … in the output directory without the original filenames (the PacketFile format does not store names).
+
+---
+
+## text_tool
+
+`text_tool` rasterizes a TrueType font into a bitmap texture atlas and a companion binary glyph metrics file. The engine uses these two output files together to render in-game text.
+
+**Source:** `text_tool/main.cpp`
+
+**Requirements:** SDL2, SDL2\_ttf, GLEW, OpenGL (the tool creates an off-screen GL context to initialize GLEW).
+
+**Usage:**
+
+```bash
+text_tool <font_name.ttf> <size> <out_font_name>
+```
+
+| Argument | Description |
+|----------|-------------|
+| `font_name.ttf` | Path to the TrueType font file to rasterize. |
+| `size` | Font size in points (must be between 1 and 99 inclusive). |
+| `out_font_name` | Base name for the output files (no extension). |
+
+The tool writes two output files:
+
+| Output | Description |
+|--------|-------------|
+| `<out_font_name>.bmp` | 32-bit RGBA bitmap texture atlas containing all glyphs from ASCII 32 (space) through 254, arranged in rows of 32 characters. Dimensions are rounded up to the nearest power of two. |
+| `<out_font_name>.glyph` | Binary glyph metrics file storing per-character advance width, UV offsets, and font-level ascent and line-skip values. |
+
+**Example:**
+
+```bash
+text_tool fonts/arial.ttf 14 data/fonts/arial14
+# Produces: data/fonts/arial14.bmp
+#           data/fonts/arial14.glyph
+```
+
+<Note>
+`text_tool` creates a temporary `tmp/` directory alongside the working directory to save individual glyph BMP files during rasterization. You can delete this directory after the tool finishes.
+</Note>
+
+---
+
+## String resource generation
+
+Game UI text is stored in a Windows resource script (`Script1.rc`) and referenced by integer IDs from `resource.h`. The Perl script `test_scripts/res_conv/res_conv.pl` converts these two files into C++ source that is compiled directly into the engine.
+
+<Steps>
+  <Step title="Pre-process Script1.rc">
+    Open `test_scripts/res_conv/Script1.rc` in vim and escape all embedded double-quote pairs before the script can parse them correctly:
+
+    ```vim
+    :%s/""/\\"/g
+    :wq
+    ```
+  </Step>
+  <Step title="Run the conversion script">
+    ```bash
+    cd test_scripts/res_conv
+    perl res_conv.pl
+    ```
+
+    The script reads `resource.h` (for the `IDS_*` integer IDs) and `Script1.rc` (for the string values), then writes:
+
+    - `strings.res.h` — C++ header declaring the `eStringIds` enum
+    - `strings.res.cpp` — C++ source defining the `StringRecords[]` array
+  </Step>
+  <Step title="Copy output files into the engine source tree">
+    ```bash
+    cp strings.res.h strings.res.cpp ../../res/
+    ```
+
+    The engine's build expects these files at `res/strings.res.h` and `res/strings.res.cpp`. Rebuild the engine after copying to pick up any string changes.
+  </Step>
+</Steps>
+
+<Warning>
+If you skip the vim pre-processing step, the Perl regex that matches double-quoted string values will fail on entries that contain escaped quotes, silently omitting those strings from the output.
+</Warning>
+
+---
+
+## Typical full asset build sequence
+
+The following sequence rebuilds all game archives from scratch, assuming source data is already in place:
+
+```bash
+# 1. Convert all 3D objects from ASE to TGL/AGL
+aseconv -prefix-path data/tgl/ -dst-path data/tgl/
+
+# 2. Generate RSP manifests for each archive
+makersp -rsp mission.rsp  -p data/missions/  -w "*.fit" -w "*.ftt" -w "*.abl"
+makersp -rsp tgl.rsp      -p data/tgl/       -w "*.tgl" -w "*.agl"
+makersp -rsp art.rsp      -p data/art/       -w "*.tga"
+makersp -rsp textures.rsp -p data/textures/  -w "*.tga"
+makersp -rsp misc.rsp     -p data/           -w "*.csv" -w "*.fit"
+makersp -rsp camera.rsp   -p data/cameras/   -w "*.fit"
+makersp -rsp effect.rsp   -p data/effects/   -w "*.eff"
+makersp -rsp insignia.rsp -p data/insignia/  -w "*.tga"
+
+# 3. Pack each archive
+makefst -f mission.fst  -p data/missions/  -m data/missions  -rsp mission.rsp
+makefst -f tgl.fst      -p data/tgl/       -m data/tgl       -rsp tgl.rsp
+makefst -f art.fst      -p data/art/       -m data/art       -rsp art.rsp
+makefst -f textures.fst -p data/textures/  -m data/textures  -rsp textures.rsp
+makefst -f misc.fst     -p data/           -m data           -rsp misc.rsp
+makefst -f camera.fst   -p data/cameras/   -m data/cameras   -rsp camera.rsp
+makefst -f effect.fst   -p data/effects/   -m data/effects   -rsp effect.rsp
+makefst -f insignia.fst -p data/insignia/  -m data/insignia  -rsp insignia.rsp
+
+# 4. Regenerate font assets (example for a 14-point font)
+text_tool fonts/source/mc2font.ttf 14 data/fonts/mc2font14
+
+# 5. Regenerate string resources
+cd test_scripts/res_conv && perl res_conv.pl && cp strings.res.* ../../res/
+```

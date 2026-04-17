@@ -1,0 +1,82 @@
+{
+  "projectType": "general",
+  "projectName": "MechCommander 2 Open Source Engine",
+  "projectDescription": "An open-source reimplementation and Linux/OpenGL port of the MechCommander 2 real-time strategy game engine, supporting both Linux and Windows in 64-bit mode.",
+  "theme": "aspen",
+  "primaryColor": "#3B6E8F",
+  "lightColor": "#5A9EC4",
+  "darkColor": "#1C3D52",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Building",
+            "pages": [
+              "building/linux",
+              "building/windows",
+              "building/data-assets"
+            ]
+          },
+          {
+            "group": "Engine Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/gameos",
+              "architecture/rendering",
+              "architecture/game-objects",
+              "architecture/sound"
+            ]
+          },
+          {
+            "group": "Configuration & Data",
+            "pages": [
+              "configuration/system-config",
+              "configuration/file-formats",
+              "configuration/data-tools"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "development/contributing",
+              "development/debugging",
+              "development/known-issues"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Full open-source reimplementation of the MechCommander 2 engine",
+    "OpenGL rendering with GLSL shader support",
+    "Cross-platform: Linux and Windows (64-bit)",
+    "SDL2-based audio, input, and window management",
+    "gosFX particle effects system",
+    "ABL scripting language interpreter for mission logic",
+    "FastFile (.fst) archive format for game assets",
+    "Terrain rendering with texture management",
+    "Save/load game functionality",
+    "Data conversion and asset pipeline tools"
+  ],
+  "publicApiSurface": [
+    "GameOS abstraction layer (gameos.hpp)",
+    "gosFX particle effects system (gosfx.hpp)",
+    "Terrain class (terrain.h)",
+    "SoundSystem (soundsys.h)",
+    "MechLib (mclib.h)",
+    "Mission scripting via ABL interpreter",
+    "Data tools: aseconv, makefst, makersp, pak, text_tool",
+    "system.cfg configuration file",
+    "FastFile (.fst) asset archives"
+  ]
+}

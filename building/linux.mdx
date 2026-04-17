@@ -1,0 +1,143 @@
+---
+title: "Build MechCommander 2 Engine on Linux with CMake"
+description: "Install dependencies, configure CMake, and compile the MechCommander 2 open source engine and its string resources library on Linux."
+---
+
+The MC2 engine builds cleanly on Linux using CMake and a C++11-capable compiler. You will need the SDL2 family of libraries, GLEW, OpenGL, and zlib. The steps below assume a Debian or Ubuntu host, but the process is the same on any distribution — substitute your package manager where needed.
+
+## Prerequisites
+
+Install the following packages before configuring the build. CMake 3.10 or newer is required; GCC and Clang are both supported as long as they provide C++11 support.
+
+| Dependency | Package (Debian/Ubuntu) | Purpose |
+|---|---|---|
+| CMake 3.10+ | `cmake` | Build system generator |
+| GCC or Clang (C++11) | `build-essential` | C++ compiler |
+| SDL2 | `libsdl2-dev` | Window, input, and platform layer |
+| SDL2_mixer | `libsdl2-mixer-dev` | Audio playback |
+| SDL2_ttf | `libsdl2-ttf-dev` | Font rendering (used by `text_tool`) |
+| GLEW | `libglew-dev` | OpenGL extension loading |
+| OpenGL | `libgl-dev` | 3D rendering |
+| zlib | `zlib1g-dev` | Compression for FastFile archives |
+
+## Build steps
+
+<Steps>
+  <Step title="Install dependencies">
+    On Debian or Ubuntu, install all required packages with a single command:
+
+    ```bash
+    sudo apt-get update
+    sudo apt-get install -y \
+      cmake build-essential \
+      libsdl2-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+      libglew-dev libgl-dev \
+      zlib1g-dev
+    ```
+
+    If your distribution ships an older CMake, install a newer version from [cmake.org](https://cmake.org/download/) or via `pip install cmake`.
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/alariq/mc2.git
+    cd mc2
+    ```
+  </Step>
+
+  <Step title="Create a build directory">
+    Using an out-of-source build directory keeps generated files separate from the source tree:
+
+    ```bash
+    mkdir build64
+    cd build64
+    ```
+  </Step>
+
+  <Step title="Configure with CMake">
+    Run CMake from inside the build directory, pointing it at the source root with `..`:
+
+    ```bash
+    cmake -DCMAKE_PREFIX_PATH=/usr \
+          -DCMAKE_BUILD_TYPE=Release \
+          ..
+    ```
+
+    **`CMAKE_PREFIX_PATH`** tells CMake where to search for the installed libraries. On a standard Debian/Ubuntu system `/usr` is correct. If you installed SDL2 or GLEW to a custom prefix, supply that path instead (use an absolute path).
+
+    **`CMAKE_BUILD_TYPE`** controls the compilation mode:
+
+    - `Release` — optimised binary, no extra debugging overhead.
+    - `Debug` — adds the preprocessor flags `_ARMOR`, `_DEBUG`, `BUGLOG`, and `LAB_ONLY`, which enable assertion checks, detailed logging, and lab-only code paths. Use this for development or when investigating engine bugs.
+
+    CMake exports a `compile_commands.json` file automatically (`CMAKE_EXPORT_COMPILE_COMMANDS` is set to `ON` in `CMakeLists.txt`), which clangd and other language servers can use for IDE integration.
+  </Step>
+
+  <Step title="Compile the engine">
+    ```bash
+    make -j$(nproc)
+    ```
+
+    This produces the `mc2` executable in the build directory. Pass `-j` with a thread count to parallelise the build across all CPU cores.
+  </Step>
+
+  <Step title="Build the string resources library">
+    The engine loads localised strings from a shared library built in the `res/` subdirectory. The source files `strings.res.cpp` and `strings.res.h` are pre-generated and already present in `test_scripts/res_conv/`; copy them before building:
+
+    ```bash
+    # From the repository root
+    cp test_scripts/res_conv/strings.res.cpp res/
+    cp test_scripts/res_conv/strings.res.h   res/
+
+    cd res
+    mkdir build64 && cd build64
+    cmake -DCMAKE_BUILD_TYPE=Release ..
+    make -j$(nproc)
+    ```
+
+    This produces `libmc2res_64.so` (or `libmc2res_32.so` for a 32-bit build). Place the resulting shared library alongside the `mc2` executable.
+
+    <Note>
+      If you need to regenerate the string source files from scratch — for example after editing string data — run the Perl script first:
+
+      ```bash
+      perl test_scripts/res_conv/res_conv.pl
+      ```
+
+      Then copy the generated `strings.res.cpp` and `strings.res.h` to the `res/` directory before building.
+    </Note>
+  </Step>
+</Steps>
+
+## Clang static analysis
+
+The repository ships `export_clang_paths.sh`, which sets the environment variables (`CC`, `CXX`, `CCC`, `CCC_CXX`, `LD`) required to run the Clang static analyser (`ccc-analyzer` / `c++-analyzer`) instead of GCC. Source the script before calling CMake if you want to perform a scan-build pass:
+
+```bash
+source export_clang_paths.sh
+cmake ..
+make
+```
+
+Adjust the paths inside the script to match your local LLVM installation before use.
+
+## Debug vs release builds
+
+The `CMakeLists.txt` sets the following extra flags for the `Debug` build type:
+
+```cmake
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D_ARMOR -D_DEBUG -DBUGLOG -DLAB_ONLY")
+```
+
+| Flag | Effect |
+|---|---|
+| `_ARMOR` | Enables defensive checks and assertions throughout the engine |
+| `_DEBUG` | Activates debug-only code paths |
+| `BUGLOG` | Turns on verbose bug logging |
+| `LAB_ONLY` | Enables features intended only for development builds |
+
+Use `Release` builds for normal gameplay; use `Debug` builds when you are tracking down a crash or validating a code change.
+
+## Next step
+
+The engine requires game data files to run. See [Build and prepare MC2 game data assets](/building/data-assets) for instructions on obtaining and building the required data.

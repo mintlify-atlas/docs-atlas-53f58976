@@ -1,0 +1,91 @@
+---
+title: "Known issues and limitations in MC2 Engine"
+description: "A categorized reference of known bugs, unimplemented features, and original game issues discovered and fixed during the MC2 open source port."
+---
+
+The MechCommander 2 open source engine is fully playable: the entire campaign is passable on both Linux and Windows, and a large number of bugs present in the original game have been found and fixed during the porting work. The project's author considers it finished for the foreseeable future, though the items below represent known gaps that a contributor could address.
+
+## Project status
+
+<CardGroup cols={2}>
+  <Card title="Full campaign passable" icon="check">
+    The complete MC2 campaign has been completed on Linux. All missions are reachable and completable with the open source engine.
+  </Card>
+  <Card title="Linux and Windows" icon="monitor">
+    The engine runs in 64-bit mode on both Linux and Windows. CMake handles the platform differences.
+  </Card>
+  <Card title="Networking not implemented" icon="x">
+    Multiplayer networking is not available. The original game supported LAN play, but no network layer has been implemented in the port.
+  </Card>
+  <Card title="Sound partially implemented" icon="volume-x">
+    The audio system works for basic playback. Stereo panning and the Doppler effect are not supported.
+  </Card>
+</CardGroup>
+
+## Known limitations
+
+<AccordionGroup>
+  <Accordion title="Sound system: no panning or Doppler effect">
+    The engine uses SDL_mixer for audio playback. Positional audio features — specifically stereo panning and Doppler pitch shifting based on unit velocity — are not implemented. Sounds play at a fixed position and pitch regardless of unit location relative to the camera.
+
+    This affects immersion during combat but does not impact gameplay or progression.
+  </Accordion>
+
+  <Accordion title="Networking not implemented">
+    The original MC2 multiplayer protocol was not part of the open source interface files. No networking code exists in the current codebase. The source files for multiplayer screens (`code/mpconnectiontype.cpp`, `code/mpgamebrowser.cpp`, `code/mphostgame.cpp`, etc.) are present but contain stub or non-functional implementations.
+
+    Implementing networking would require designing the architecture from scratch.
+  </Accordion>
+
+  <Accordion title="Memory leaks (heap implementation incomplete)">
+    The engine includes a custom memory heap system intended to manage all allocations. The implementation is not complete: some allocations still bypass the heap and go directly to the system allocator. This means the heap cannot fully account for or reclaim all memory. Some leaks remain at program exit.
+
+    The suppression files in `misc/valgrind.supp` and `misc/valgrind-fglrx.supp` cover known false positives from graphics drivers, but genuine engine leaks remain.
+  </Accordion>
+
+  <Accordion title="Compressed TGA loading not supported (TODO item 4)">
+    The texture loading code handles uncompressed TGA files only. Run-length encoded (RLE compressed) TGA files are not supported. If you encounter missing or corrupted textures when using assets that use compressed TGA format, this is the cause.
+  </Accordion>
+
+  <Accordion title="GameDebugWindow duplicated between code/ and mclib/ (TODO item 1)">
+    The `GameDebugWindow` class exists in both the `code/` and `mclib/` directories. This duplication has not been resolved. The `mclib/` version is the canonical location; the `code/` copy should be removed or unified once a contributor verifies which version is authoritative.
+  </Accordion>
+
+  <Accordion title="ablmc2.cpp present in both ABLT and code/ folders (NOTABUG)">
+    The file `ablmc2.cpp` appears in both the `ABLT/` folder (the ABL scripting subsystem) and the `code/` folder. This is tracked as NOTABUG in the TODO file because the ABLT copy is not currently used by the build — the `ABLT/` subtree is not linked into the main executable. The situation may need revisiting if ABLT integration is ever completed.
+  </Accordion>
+</AccordionGroup>
+
+## Bugs fixed versus the original game
+
+The porting work uncovered and fixed a number of bugs that existed in the original shipped game. The fixes below are complete and present in the current codebase.
+
+<AccordionGroup>
+  <Accordion title="Mech custom colors were inverted (DONE)">
+    The color channels for mech paint schemes set in the options menu were inverted relative to what the game expected. The color swapping has been corrected. Custom mech colors now display as intended.
+  </Accordion>
+
+  <Accordion title="Save/load watchSave pointer type mismatch (DONE)">
+    In `code/objmgr.cpp`, the `watchSave` variable was declared as `long*` in the original code. On 64-bit Linux, `long` is 8 bytes while the serialized format expected 4-byte integers. This caused save file corruption on 64-bit systems. The type has been corrected to `int*`.
+  </Accordion>
+
+  <Accordion title=".rsp file support for pack/unpack tool (DONE)">
+    The `makersp` and `mpak` tools now support `.rsp` response files, which allow long lists of filenames to be passed to the tool via a file rather than on the command line. This was needed for the data build pipeline to function on all platforms.
+  </Accordion>
+
+  <Accordion title="TGL/AGL file generation tool (DONE)">
+    The original workflow required TGL and AGL files (texture and geometry data) to be generated externally. A tool (`aseconv`) has been added that generates these files from ASE source assets, removing a manual step from the data build pipeline.
+  </Accordion>
+
+  <Accordion title="General crash fixes">
+    Multiple crash bugs present in the original game have been fixed during the port. These include crashes in mission initialization, unit management, and rendering. The exact set of fixes is distributed throughout the codebase rather than tracked as a single item.
+  </Accordion>
+</AccordionGroup>
+
+## Reporting new issues
+
+If you find a bug that is not listed here, open an issue on the [GitHub repository](https://github.com/alariq/mc2/issues). Include your platform (Linux distribution and kernel version, or Windows version), build type (`Debug` or `Release`), and steps to reproduce. Attach any relevant log output or a Valgrind report if you have one.
+
+<Note>
+  The project author has stated that the project is considered finished for the foreseeable future due to other commitments. Bug reports and pull requests are welcome, but response time may be slow. You are encouraged to fork the repository and apply fixes independently.
+</Note>

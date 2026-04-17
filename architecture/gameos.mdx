@@ -1,0 +1,155 @@
+---
+title: "GameOS: Platform Abstraction Layer"
+description: "How GameOS wraps SDL2, OpenGL, and the filesystem behind the same API surface that the original DirectX-era MechCommander 2 engine expected."
+---
+
+GameOS is a reimplementation of the proprietary Microsoft GameOS abstraction layer that the original MechCommander 2 shipped with. The open-source port reconstructs it from the original header files — primarily `GameOS/include/gameos.hpp` — substituting SDL2 for DirectInput and DirectDraw, OpenGL/GLEW for Direct3D, and SDL2\_mixer for DirectSound. The game code in `code/` and `mclib/` calls the same `gos_*` API surface it always did; only the bodies of those functions changed.
+
+## Source layout
+
+```
+GameOS/
+├── include/          # Public API headers (read-only by game code)
+│   ├── gameos.hpp    # Master header: environment, types, all gos_* declarations
+│   ├── fileio.hpp    # File I/O API
+│   ├── font3d.hpp    # 3D font rendering
+│   ├── platform_*.h  # Windows type compatibility shims for Linux
+│   └── ...
+└── gameos/           # Implementation (the gameos library target)
+    ├── gameos.cpp          # Core: main loop, timing, memory heaps
+    ├── gameos_graphics.cpp # OpenGL renderer, texture management, vertex buffers
+    ├── gameos_sound.cpp    # SDL2_mixer audio backend
+    ├── gameos_input.cpp    # SDL2 keyboard/mouse/controller input
+    ├── gameos_fileio.cpp   # File I/O implementation
+    ├── gameos_debugging.cpp# Debug logging, statistics
+    ├── gos_render.cpp/.h   # RenderWindow / RenderContext (SDL2 + OpenGL context)
+    └── utils/              # Shader builder, GL utilities, timing
+```
+
+## The gosEnvironment structure
+
+Before GameOS initializes any subsystem, it calls `GetGameOSEnvironment` (implemented in `code/mechcmd2.cpp`) and passes the command line. The game populates a single `gosEnvironment` struct declared in `gameos.hpp`. This struct is the entire configuration contract between the game and the platform layer.
+
+```cpp
+// GameOS/include/gameos.hpp
+typedef struct {
+    // Identity
+    const char* applicationName;
+    const char* version;
+    const char* directoryPath;
+
+    // Display
+    int   screenWidth;      // e.g. 1024
+    int   screenHeight;     // e.g. 768
+    int   bitDepth;         // 16 or 32
+    bool  fullScreen;
+
+    // Rendering hints
+    bool  disableZBuffer;
+    bool  AntiAlias;
+    bool  Stencil;
+
+    // Sound
+    bool  soundDisable;
+    bool  soundHiFi;        // true = 44 kHz, false = 22 kHz
+    int   soundChannels;
+
+    // Timing
+    float MaxTimeDelta;
+    float MinimumTimeDelta;
+
+    // Debugging
+    const char* debugLog;
+    const char* spew;
+    DWORD MemoryManager;
+
+    // Callbacks the game must provide
+    void (__stdcall *InitializeGameEngine)();
+    void (__stdcall *DoGameLogic)();
+    void (__stdcall *UpdateRenderers)();
+    void (__stdcall *TerminateGameEngine)();
+
+    // Optional file I/O hook
+    void (__stdcall *HookGetFile)(const char*, BYTE**, DWORD*);
+    bool (__stdcall *HookDoesFileExist)(const char*);
+} gosEnvironment;
+```
+
+GameOS clears this struct before calling `GetGameOSEnvironment`, so any field the game leaves at zero gets a safe default.
+
+## Graphics and rendering
+
+Graphics initialization flows through `gos_render.h`, which exposes the `graphics::` namespace:
+
+```cpp
+// GameOS/gameos/gos_render.h
+namespace graphics {
+    RenderWindowHandle  create_window(const char* name, int width, int height);
+    RenderContextHandle init_render_context(RenderWindowHandle rw);
+    void                make_current_context(RenderContextHandle ctx);
+    void                swap_window(RenderWindowHandle h);
+    bool                set_window_fullscreen(RenderWindowHandle rw, bool fullscreen);
+    bool                get_desktop_display_mode(int display_index,
+                            int* width, int* height, int* bpp);
+}
+```
+
+`gameos_graphics.cpp` implements the `gos_*` texture, vertex buffer, render material, and draw-call APIs on top of these primitives using GLEW-loaded OpenGL entry points. The internal `gosRenderer` class (private to that translation unit) manages the active shader program, render state cache, and vertex buffer objects.
+
+<Note>
+`GLEW::GLEW` and `OpenGL::GL` are both required at link time. The CMake `find_package` calls for these are in the root `CMakeLists.txt`. If your system has multiple OpenGL implementations, `cmake_policy(SET CMP0072 NEW)` in the root selects GLVND (the preferred modern path).
+</Note>
+
+## File I/O
+
+`gameos_fileio.cpp` implements the `HGOSFILE` stream API. The `HookGetFile` and `HookDoesFileExist` function pointers in `gosEnvironment` let the game intercept every file access. MC2 uses this to route requests through its FastFile system (`mclib/fastfile.h`), which transparently reads from `.pak`-style archive files before falling back to the real filesystem. If neither hook is set, GameOS reads directly from disk.
+
+## Input handling
+
+`gameos_input.cpp` and `gos_input.cpp`/`gos_input.h` implement keyboard, mouse, and controller polling on top of SDL2 event processing. The `gosEnvironment` fields `ButtonsAsKeys` and `allowDoubleClicks` control whether controller button presses appear in the `gos_GetKey` stream and whether double-click events are generated.
+
+## Memory management
+
+GameOS provides a named heap system. The game creates scoped heaps with `gos_CreateMemoryHeap` and pushes/pops the active heap with `gos_PushCurrentHeap` / `gos_PopCurrentHeap`. Custom `operator new` and `operator delete` in `gameos.hpp` route all allocations through the current heap. This allows per-subsystem memory accounting and bulk-free on shutdown.
+
+```cpp
+HGOSHEAP terrainHeap = gos_CreateMemoryHeap("Terrain", 0, ParentClientHeap);
+gos_PushCurrentHeap(terrainHeap);
+// ... all new calls go to terrainHeap ...
+gos_PopCurrentHeap();
+```
+
+## Timing
+
+On Linux, `gos_GetElapsedTime` calls `clock_gettime(CLOCK_MONOTONIC_RAW)` and clamps the delta to `gosEnvironment.MaxTimeDelta` / `MinimumTimeDelta`. On Windows it falls back to `timeGetTime`. High-resolution timing for profiling uses `GetCycles`, which wraps `clock_gettime` on Linux and `rdtsc` on Windows.
+
+## Debugging and profiling
+
+`gameos_debugging.cpp` implements the `SPEW`, `gosASSERT`, `STOP`, and `PAUSE` macros declared in `gameos.hpp`. In `_ARMOR` (debug) builds, `SPEW` writes formatted messages to the file named in `gosEnvironment.debugLog`, or to stdout when the value is `"debugger"`. The `spew` field is a space-separated list of group names to enable; setting it to `"GameOS_Texture"` turns on texture-related diagnostics, for example.
+
+`AddStatistic` and `StatisticFormat` (currently implemented as `printf` stubs in `gameos.cpp`) are the hooks for the in-game performance overlay.
+
+## Cross-platform compatibility
+
+The `platform_*.h` headers in `GameOS/include/` define Windows types (`DWORD`, `WORD`, `BYTE`, `BOOL`, `HANDLE`, etc.) and calling conventions (`__stdcall`, `__cdecl`) in terms of standard C types when `PLATFORM_WINDOWS` is not defined. This lets `mclib` and `code/` include `gameos.hpp` unchanged on Linux. The `LINUX_BUILD` preprocessor define (added globally in `CMakeLists.txt`) gates any remaining platform-specific code paths.
+
+<Tabs>
+  <Tab title="Linux build">
+    ```cpp
+    // platform_windows.h maps Windows types to standard types
+    typedef unsigned long  DWORD;
+    typedef unsigned short WORD;
+    typedef unsigned char  BYTE;
+    // __stdcall and __cdecl are defined as empty macros
+    #define __stdcall
+    #define __cdecl
+    ```
+  </Tab>
+  <Tab title="Windows build">
+    ```cpp
+    // PLATFORM_WINDOWS is set; real <windows.h> is included
+    #include <windows.h>
+    // All Windows types and calling conventions are native
+    ```
+  </Tab>
+</Tabs>
